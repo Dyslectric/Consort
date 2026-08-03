@@ -35,6 +35,36 @@ python -m conferencing
 A container image is provided (`Dockerfile`); it runs `python -m conferencing` and serves the
 sinks on `:8080`.
 
+## Dev testing the sidebar (run-dev)
+
+Testing the call-aware sidebar against a from-source `run-dev` Zulip needs **no real Jitsi or
+Prosody** — you run this service locally with posting off and feed it fake occupancy, playing the
+part of `event_sync` yourself. Two helpers in [`scripts/`](scripts/) do it. Keep the dev
+`EVENT_SYNC_SECRET` distinct from prod so the two environments can never talk to each other.
+
+1. **Deps** (once): `pip install -r requirements.txt` — a virtualenv is fine; the run helper picks
+   up `./.venv` automatically.
+2. **Run the dev service** — serves the sinks on `:8080` with posting disabled:
+   ```bash
+   bash scripts/dev-conferencing.sh
+   ```
+3. **Point run-dev at it** — in `zproject/dev_settings.py` (don't commit), then restart `run-dev`:
+   ```python
+   JITSI_CONFERENCING_URL = "http://localhost:8080"
+   JITSI_CONFERENCING_SECRET = "devsecret"  # match EVENT_SYNC_SECRET from step 2
+   ```
+4. **Seed a fake call** — use a real dev channel `stream_id` and real `user_id`s so avatars resolve
+   via Zulip's `/avatar/<user_id>/medium`:
+   ```bash
+   bash scripts/dev-seed-occupancy.sh 15 11:Ada 12:Bob   # a call in channel 15 with Ada and Bob
+   bash scripts/dev-seed-occupancy.sh --leave 15 12       # Bob leaves
+   bash scripts/dev-seed-occupancy.sh --end 15            # end the call; the sidebar row clears
+   ```
+   Channel 15's sidebar row gets the speaker icon (a lock too if it is private) and the avatars.
+
+The **speaking ring** cannot be seeded — it comes from a live call's Jitsi dominant-speaker events —
+so verify that one with a real call in the embedded panel.
+
 ## Configuration
 
 Read from the environment; the process refuses to start if a required value is missing and reports
