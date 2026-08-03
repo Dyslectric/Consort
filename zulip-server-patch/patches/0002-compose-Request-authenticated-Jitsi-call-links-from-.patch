@@ -1,0 +1,92 @@
+From 4d9faf7ee248d854fa4b4a5e69ef99354b975cdf Mon Sep 17 00:00:00 2001
+From: Dave Green <dgreen2001personal@gmail.com>
+Date: Fri, 31 Jul 2026 19:55:48 +0000
+Subject: [PATCH 2/2] compose: Request authenticated Jitsi call links from the
+ server.
+
+When the server advertises server_jitsi_jwt_enabled, ask it for a call
+URL rather than generating a room name locally, since only the server can
+check that the user belongs to the conversation the call is for.
+
+Servers without JWT configured are unaffected and continue to generate
+room names in the browser.
+
+Fixes #28657.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RtBu2fbrcnofxqKXmwLeAz
+---
+ web/src/compose_call_ui.ts | 37 +++++++++++++++++++++++++++++++++++++
+ web/src/state_data.ts      |  1 +
+ 2 files changed, 38 insertions(+)
+
+diff --git a/web/src/compose_call_ui.ts b/web/src/compose_call_ui.ts
+index 90a7fcf..602ca0b 100644
+--- a/web/src/compose_call_ui.ts
++++ b/web/src/compose_call_ui.ts
+@@ -4,6 +4,7 @@ import * as z from "zod/mini";
+ import * as channel from "./channel.ts";
+ import * as compose_banner from "./compose_banner.ts";
+ import * as compose_call from "./compose_call.ts";
++import * as compose_state from "./compose_state.ts";
+ import {compose_call_session_manager} from "./compose_call_session.ts";
+ import {get_recipient_label} from "./compose_closed_ui.ts";
+ import * as compose_ui from "./compose_ui.ts";
+@@ -244,6 +245,42 @@ export function generate_and_insert_audio_or_video_call_link(
+                 break;
+             }
+             case available_providers.jitsi_meet?.id: {
++                if (realm.server_jitsi_jwt_enabled) {
++                    /*  With JWT authentication configured, the room name and the
++                        token are minted by the server, which is the only place
++                        that can check whether this user is actually a member of
++                        the conversation the call belongs to. */
++                    const request: {stream_id?: number; user_ids?: string} = {};
++                    if (compose_state.get_message_type() === "stream") {
++                        request.stream_id = compose_state.stream_id();
++                    } else {
++                        request.user_ids = JSON.stringify(
++                            compose_state.private_message_recipient_ids(),
++                        );
++                    }
++
++                    const handle_success = (response: unknown): void => {
++                        const callback = (): void => {
++                            const data = call_response_schema.parse(response);
++                            const url = new URL(data.url);
++                            url.hash = `config.startWithVideoMuted=${is_audio_call ? "true" : "false"}`;
++                            if (is_audio_call) {
++                                insert_audio_call_url(url.toString(), $target_textarea);
++                            } else {
++                                insert_video_call_url(url.toString(), $target_textarea);
++                            }
++                        };
++                        compose_call_session.maybe_run_xhr_callback(xhr, callback);
++                    };
++
++                    xhr = channel.post({
++                        url: "/json/calls/jitsi/create",
++                        data: request,
++                        success: handle_success,
++                    });
++                    break;
++                }
++
+                 const video_call_id = util.random_int(100000000000000, 999999999999999);
+                 const video_call_url = compose_call.get_jitsi_server_url(video_call_id.toString());
+                 if (video_call_url === null) {
+diff --git a/web/src/state_data.ts b/web/src/state_data.ts
+index 60cd110..42bb6ca 100644
+--- a/web/src/state_data.ts
++++ b/web/src/state_data.ts
+@@ -619,6 +619,7 @@ export const realm_schema = z.object({
+     server_inline_url_embed_preview: z.boolean(),
+     server_max_deactivated_realm_deletion_days: z.nullable(z.number()),
+     server_min_deactivated_realm_deletion_days: z.nullable(z.number()),
++    server_jitsi_jwt_enabled: z.boolean(),
+     server_jitsi_server_url: z.nullable(z.string()),
+     server_name_changes_disabled: z.boolean(),
+     server_needs_upgrade: z.boolean(),
+-- 
+2.43.0
+

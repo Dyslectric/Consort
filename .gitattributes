@@ -1,0 +1,12 @@
+# This project is authored on Windows but deploys to Linux (Docker images, shell
+# scripts, Lua, Python). Normalise all text to LF so a CRLF never reaches a
+# container shell or a config the entrypoint parses.
+* text=auto eol=lf
+
+# Binary assets — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.p12 binary

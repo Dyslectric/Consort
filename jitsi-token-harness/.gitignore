@@ -1,0 +1,10 @@
+.env
+.env.bak
+.jitsi/
+secrets/
+keyserver/*.pem
+prosody-plugins-custom/*.lua
+prosody-plugins-custom/.pinned
+__pycache__/
+*.pyc
+.pytest_cache/

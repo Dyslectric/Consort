@@ -1,0 +1,153 @@
+# Phase one staging stack: Jitsi Meet with JWT auth, tenant routing, and domain
+# verification on. This is deliberately NOT a production topology — it exists to
+# make the phase one gate (rev 3 section 8) runnable on a laptop.
+#
+# Pin JITSI_IMAGE_TAG to a specific stable-NNNN release before you rely on any
+# result from this stack. Rev 3 section 2.3 warns that token_affiliation's
+# behaviour has moved between versions; "stable" is a moving target and a moving
+# target is not evidence.
+
+services:
+  web:
+    image: jitsi/web:${JITSI_IMAGE_TAG:-stable}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8000}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ${CONFIG:-./.jitsi}/web:/config:Z
+      - ${CONFIG:-./.jitsi}/web/crontabs:/var/spool/cron/crontabs:Z
+    environment:
+      - ENABLE_LETSENCRYPT
+      - ENABLE_HTTP_REDIRECT
+      - ENABLE_XMPP_WEBSOCKET
+      # Tenant routing. Without this, /TENANT/ROOM is treated as a room name
+      # containing a slash and the whole isolation model quietly evaporates.
+      - ENABLE_SUBDOMAINS=1
+      - ENABLE_AUTH=1
+      - ENABLE_GUESTS=0
+      - AUTH_TYPE=jwt
+      - PUBLIC_URL
+      - TZ
+      - XMPP_DOMAIN
+      - XMPP_AUTH_DOMAIN
+      - XMPP_BOSH_URL_BASE
+      - XMPP_GUEST_DOMAIN
+      - XMPP_MUC_DOMAIN
+      - XMPP_RECORDER_DOMAIN
+      - JICOFO_AUTH_USER
+    networks:
+      meet.jitsi:
+
+  prosody:
+    image: jitsi/prosody:${JITSI_IMAGE_TAG:-stable}
+    restart: unless-stopped
+    expose:
+      - "5222"
+      - "5347"
+      - "5280"
+    volumes:
+      - ${CONFIG:-./.jitsi}/prosody/config:/config:Z
+      # jitsi-contrib modules land here. plugin_paths already includes this
+      # directory, so nothing else needs to know about them. Note this is the
+      # only mount at this target — mounting the generated config dir here too
+      # silently shadows it.
+      - ./prosody-plugins-custom:/prosody-plugins-custom:ro
+    environment:
+      - ENABLE_AUTH=1
+      - ENABLE_GUESTS=0
+      - AUTH_TYPE=jwt
+      # --- JWT ---------------------------------------------------------
+      - JWT_APP_ID
+      - JWT_APP_SECRET
+      - JWT_ACCEPTED_ISSUERS
+      - JWT_ACCEPTED_AUDIENCES
+      - JWT_ASAP_KEYSERVER
+      # The control this whole phase exists to verify. If this is 1, an
+      # unauthenticated join succeeds and every test below becomes meaningless.
+      - JWT_ALLOW_EMPTY=0
+      - JWT_AUTH_TYPE=token
+      # --- Prosody modules ---------------------------------------------
+      # token_no_wildcard is cheap insurance against your own bugs; a wildcard
+      # room claim is catastrophic and fails silently without it.
+      - XMPP_MUC_MODULES=token_verification,token_no_wildcard,token_affiliation,muc_domain_mapper,muc_census
+      - XMPP_MODULES=presence_identity
+      - JICOFO_AUTH_USER
+      - JICOFO_AUTH_PASSWORD
+      - JVB_AUTH_USER
+      - JVB_AUTH_PASSWORD
+      - PUBLIC_URL
+      - TZ
+      - XMPP_DOMAIN
+      - XMPP_AUTH_DOMAIN
+      - XMPP_GUEST_DOMAIN
+      - XMPP_MUC_DOMAIN
+      - XMPP_INTERNAL_MUC_DOMAIN
+      - XMPP_RECORDER_DOMAIN
+      - XMPP_CROSS_DOMAIN
+    networks:
+      meet.jitsi:
+        aliases:
+          - ${XMPP_SERVER:-xmpp.meet.jitsi}
+
+  jicofo:
+    image: jitsi/jicofo:${JITSI_IMAGE_TAG:-stable}
+    restart: unless-stopped
+    depends_on:
+      - prosody
+    volumes:
+      - ${CONFIG:-./.jitsi}/jicofo:/config:Z
+    environment:
+      - ENABLE_AUTH=1
+      - AUTH_TYPE=jwt
+      - JICOFO_AUTH_USER
+      - JICOFO_AUTH_PASSWORD
+      - JICOFO_ENABLE_AUTH=1
+      - PUBLIC_URL
+      - TZ
+      - XMPP_DOMAIN
+      - XMPP_AUTH_DOMAIN
+      - XMPP_INTERNAL_MUC_DOMAIN
+      - XMPP_MUC_DOMAIN
+      - XMPP_SERVER
+    networks:
+      meet.jitsi:
+
+  jvb:
+    image: jitsi/jvb:${JITSI_IMAGE_TAG:-stable}
+    restart: unless-stopped
+    depends_on:
+      - prosody
+    ports:
+      - "${JVB_PORT:-10000}:${JVB_PORT:-10000}/udp"
+    volumes:
+      - ${CONFIG:-./.jitsi}/jvb:/config:Z
+    environment:
+      - DOCKER_HOST_ADDRESS
+      - JVB_AUTH_USER
+      - JVB_AUTH_PASSWORD
+      - JVB_PORT
+      - PUBLIC_URL
+      - TZ
+      - XMPP_AUTH_DOMAIN
+      - XMPP_INTERNAL_MUC_DOMAIN
+      - XMPP_SERVER
+    networks:
+      meet.jitsi:
+
+  # The ASAP "key server". Rev 3 section 2.7: this is a static file server, not a
+  # JWKS endpoint. Prosody fetches sha256(kid).pem from under this base URL.
+  # Only used when JITSI_JWT_ALGORITHM=RS256; harmless otherwise.
+  keyserver:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./keyserver:/usr/share/nginx/html:ro
+    networks:
+      meet.jitsi:
+        aliases:
+          - keys.meet.jitsi
+
+networks:
+  meet.jitsi:
+    driver: bridge

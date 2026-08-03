@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Secrets & local environment — templates like .env.example stay tracked
+.env
+.env.local
+*.local
+secrets.conf
+
+# Private keys / certs (the harness generates its own; never commit them)
+*.pem
+*.key
+*.p12
+
+# Node
+node_modules/
+
+# Claude Code local harness config (machine-specific paths, permissions)
+.claude/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

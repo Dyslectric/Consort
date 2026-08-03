@@ -1,0 +1,33 @@
+# Python bytecode / build
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Test & type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Local environment / secrets — deployment values live in compose/.env on the
+# host, never in the repo (EVENT_SYNC_SECRET, ZULIP_API_KEY, hook secret, etc.)
+.env
+.env.*
+*.local
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

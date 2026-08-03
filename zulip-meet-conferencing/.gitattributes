@@ -1,0 +1,8 @@
+# This service is authored on Windows and runs on Linux (docker). Normalise all
+# text to LF so a CRLF never reaches a container shell script or Python file.
+* text=auto eol=lf
+
+# Binary assets, if any are ever added.
+*.png binary
+*.jpg binary
+*.ico binary

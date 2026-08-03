@@ -1,0 +1,67 @@
+# docker-compose.override.yml additions for the companion docker-jitsi-meet.
+# This is the METHOD THAT ACTUALLY WORKS on this image (verified live 2026-08-02),
+# after the /defaults/conf.d approach turned out to be a dead end (the config
+# generator does not glob custom files there).
+#
+# Prep before `docker compose up -d`:
+#   1. mkdir -p ./config/prosody/prosody-plugins-custom ./prosody-custom
+#   2. Put the plugin code in ./config/prosody/prosody-plugins-custom/:
+#        - mod_event_sync_component.lua   (jitsi-contrib/prosody-plugins, event_sync/; pin a commit)
+#        - mod_muc_census.lua is ALREADY in the image — do not vendor it (Phase B just enables it)
+#   3. Copy event_sync.cfg.lua into the same plugins-custom dir (persistent). NO
+#      secret substitution: the file reads the secret from the environment via
+#      os.getenv("EVENT_SYNC_SECRET"), so the SAME .env value feeds both this
+#      Prosody and the conferencing service. (Do NOT sed a secret into the file —
+#      .env/${VAR} interpolation does not reach mounted config files, only
+#      docker-compose.yml, so a placeholder there would load literally.)
+#        cp event_sync.cfg.lua ./config/prosody/prosody-plugins-custom/
+#   4. Put deploy/prosody/Dockerfile at ./prosody-custom/Dockerfile
+#   5. Set EVENT_SYNC_SECRET=<value> once in .env (used by both services below).
+#   6. docker compose build prosody && docker compose up -d --force-recreate prosody conferencing
+#
+# The Dockerfile appends `Include "/prosody-plugins-custom/*.cfg.lua"` to the main
+# config template, so the .cfg.lua in the persistent plugins-custom dir is loaded
+# on every start (it survives the /run tmpfs regeneration). Confirm with:
+#   docker compose logs prosody | grep -iE "Danger|esync"
+# You want `esync.meet.jitsi ... Component loaded muc.meet.jitsi` and no "Danger".
+
+services:
+  prosody:
+    build:
+      context: ./prosody-custom
+      args:
+        JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
+    image: local/jitsi-prosody:${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
+    environment:
+      # The bearer secret the event_sync Component reads via os.getenv. docker-
+      # jitsi-meet only forwards a curated env list, so it must be named explicitly
+      # here — .env alone does not reach the Prosody container.
+      EVENT_SYNC_SECRET: ${EVENT_SYNC_SECRET}
+      # Phase B only — enables the (already-present) muc_census module on
+      # muc.meet.jitsi. Leave commented for Phase A so there is one change at a time.
+      # XMPP_MUC_MODULES: muc_census
+      # (comma-separate if you already set other custom MUC modules)
+    volumes:
+      # Plugin code + the rendered event_sync.cfg.lua, both persistent.
+      - ./config/prosody/prosody-plugins-custom:/prosody-plugins-custom:ro
+
+  # The conferencing service, reachable by Prosody at http://conferencing:8080
+  # because it shares the meet.jitsi network and the service name resolves.
+  conferencing:
+    build: ../zulip-meet-conferencing   # adjust to wherever the service code lives
+    image: local/conferencing:latest
+    restart: unless-stopped
+    environment:
+      ZULIP_SITE: ${ZULIP_SITE}            # e.g. https://zulip.davig01.net
+      ZULIP_EMAIL: ${ZULIP_BOT_EMAIL}      # a Zulip generic bot
+      ZULIP_API_KEY: ${ZULIP_BOT_API_KEY}
+      EVENT_SYNC_SECRET: ${EVENT_SYNC_SECRET}  # MUST equal the Bearer in event_sync.cfg.lua
+      # CENSUS_URL:  set in Phase B, e.g. http://prosody:5280/room-census
+    networks:
+      - meet.jitsi   # the network docker-jitsi-meet's compose defines; must match
+
+# meet.jitsi is declared in docker-jitsi-meet's own docker-compose.yml; listing it
+# here as external keeps compose from creating a second, isolated network.
+networks:
+  meet.jitsi:
+    external: false
