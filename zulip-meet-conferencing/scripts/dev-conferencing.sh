@@ -22,6 +22,11 @@ export BIND_PORT="${BIND_PORT:-8080}"
 # event-loop thread just logs harmless auth errors. Unset ZULIP_HOOK_URL to go back
 # to poll-only mode (the sidebar then refreshes on the slow 15s backstop instead).
 export ZULIP_HOOK_URL="${ZULIP_HOOK_URL:-http://localhost:9991/api/internal/jitsi}"
+# The event-queue loop needs real bot credentials (a valid ZULIP_API_KEY), which
+# dev has none of, so it is off by default here — it only drives reconcile-on-
+# reconnect, which sidebar testing does not use. Set EVENT_LOOP=1 (with a real key)
+# to run it.
+export EVENT_LOOP="${EVENT_LOOP:-0}"
 
 # Run from the package root so `python -m conferencing` resolves, and prefer a
 # local virtualenv if one exists.

@@ -112,6 +112,10 @@ class TestConfig:
         assert config.reconciliation_enabled is True
         assert config.census_url == "http://prosody:5280/census"
 
+    def test_the_event_loop_is_on_by_default_and_can_be_disabled(self):
+        assert Config.from_env(ENV).event_loop_enabled is True
+        assert Config.from_env({**ENV, "EVENT_LOOP": "0"}).event_loop_enabled is False
+
     def test_a_non_numeric_setting_is_a_config_error_not_a_crash(self):
         with pytest.raises(ConfigError):
             Config.from_env({**ENV, "BIND_PORT": "not-a-port"})

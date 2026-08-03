@@ -136,15 +136,17 @@ def main() -> int:
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    loop_thread.start()
+    if config.event_loop_enabled:
+        loop_thread.start()
     ticker_thread.start()
     logger.info(
-        "serving event_sync on %s:%s%s (reconciliation %s, posting %s)",
+        "serving event_sync on %s:%s%s (reconciliation %s, posting %s, event-loop %s)",
         config.bind_host,
         config.bind_port,
         config.sink_prefix,
         "on" if config.reconciliation_enabled else "off",
         "on" if config.posting_enabled else "off",
+        "on" if config.event_loop_enabled else "off",
     )
     try:
         server.serve_forever()

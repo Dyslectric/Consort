@@ -68,6 +68,12 @@ class Config:
     #: derive rooms themselves (private-call ring, channel reverse-lookup).
     room_key: str = ""
 
+    #: Whether to run the Zulip event-queue loop. On by default; its reconnect
+    #: drives reconciliation and it is the seam for the private-call flow. Turn it
+    #: OFF in dev (``EVENT_LOOP=0``) when you have no real bot key — the sinks and
+    #: the occupancy push do not use it, so it is only log noise there.
+    event_loop_enabled: bool = True
+
     bind_host: str = "0.0.0.0"
     #: Matches the architecture doc's `api_prefix = http://conferencing:8080/...`,
     #: so the Prosody event_sync component and the service agree out of the box.
@@ -114,6 +120,9 @@ class Config:
             "0", "false", "no", "off",
         )
         zulip_hook_host = (env.get("ZULIP_HOOK_HOST") or "").strip() or None
+        event_loop_enabled = (env.get("EVENT_LOOP", "true").strip().lower()) not in (
+            "0", "false", "no", "off",
+        )
 
         try:
             bind_port = int(env.get("BIND_PORT", "8080"))
@@ -134,6 +143,7 @@ class Config:
             hook_verify_tls=hook_verify_tls,
             zulip_hook_host=zulip_hook_host,
             room_key=(env.get("JITSI_ROOM_KEY") or "").strip(),
+            event_loop_enabled=event_loop_enabled,
             bind_host=(env.get("BIND_HOST") or "0.0.0.0").strip(),
             bind_port=bind_port,
             sink_prefix=(env.get("SINK_PREFIX") or "/api/v1/jitsi").strip(),

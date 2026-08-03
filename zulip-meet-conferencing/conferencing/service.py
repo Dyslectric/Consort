@@ -324,7 +324,7 @@ class Service:
                 occupants=list(roster["occupants"]),
             )
         except Exception:
-            logger.debug("occupancy push failed for room %s", call.room, exc_info=True)
+            logger.warning("occupancy push failed for room %s", call.room, exc_info=True)
 
     # -- ring timeouts ----------------------------------------------------
 
