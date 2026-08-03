@@ -95,6 +95,7 @@ class Service:
             on_change=self.on_occupancy_change,
             on_call_created=self.handle_call_created,
             on_occupancy_query=self.occupancy_for_stream,
+            on_occupancy_all=self.occupancy_all,
             clock=self.clock,
         )
 
@@ -147,6 +148,23 @@ class Service:
         ]
         people.sort(key=lambda person: person["name"].lower())
         return people
+
+    def occupancy_all(self) -> dict[str, Any]:
+        """Occupancy for every channel with a live call, for the sidebar.
+
+        The sidebar shows call state across all of a user's channels at once, so
+        it wants every active channel call in one request rather than polling each.
+        DM calls (no ``stream_id``) are omitted — the sidebar is channels. Like
+        ``occupancy_for_stream`` this does not itself check access: its only caller
+        is the phase-two patch, which filters the result to the channels the
+        requesting user may actually see before it reaches a browser.
+        """
+        rooms = [
+            self.occupancy_for_stream(call.stream_id)
+            for call in self.store.active_calls()
+            if call.stream_id is not None
+        ]
+        return {"rooms": rooms}
 
     # -- call bookkeeping -------------------------------------------------
 

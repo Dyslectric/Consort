@@ -423,6 +423,26 @@ class TestOccupancyWidget:
         )
         assert bad.status_code == 400
 
+    def test_the_occupancy_all_sink_lists_every_active_channel_call(self):
+        store = Store()
+        service = self._service(store, FakePoster(message_id=1))
+        service.handle_call_created({"room": "c-abc", "stream_id": 7, "scope": "s7"})
+        store.occupant_joined("c-abc", Occupant("j1", display_name="Ada"), now=1000)
+        service.handle_call_created({"room": "c-def", "stream_id": 9, "scope": "s9"})
+        # A direct-message call (no stream_id) is not a channel and must not appear.
+        service.handle_call_created({"room": "c-dm", "user_ids": [1, 2], "scope": "sdm"})
+        app = service.make_app("s3cret", prefix="/api/v1/jitsi")
+        app.config.update(TESTING=True)
+        http = app.test_client()
+
+        assert http.get("/api/v1/jitsi/occupancy_all").status_code == 401  # no secret
+        ok = http.get("/api/v1/jitsi/occupancy_all", headers={"Authorization": "Bearer s3cret"})
+        assert ok.status_code == 200
+        by_stream = {room["stream_id"]: room for room in ok.get_json()["rooms"]}
+        assert set(by_stream) == {7, 9}  # channels only; the DM call is omitted
+        assert by_stream[7]["occupants"] == [{"name": "Ada", "user_id": None}]
+        assert by_stream[9]["count"] == 0
+
 
 class TestEventDispatch:
     def test_message_and_submessage_are_recognised(self):

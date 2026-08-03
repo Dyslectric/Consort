@@ -71,6 +71,7 @@ def build_blueprint(
     on_change: Callable[[str], None] | None = None,
     on_call_created: Callable[[dict[str, Any]], None] | None = None,
     on_occupancy_query: Callable[[int], dict[str, Any]] | None = None,
+    on_occupancy_all: Callable[[], dict[str, Any]] | None = None,
     clock: Callable[[], float] = time.time,
 ) -> Blueprint:
     """Sinks for Prosody's occupancy events plus the calls patch's call notices.
@@ -173,6 +174,15 @@ def build_blueprint(
             return jsonify({"error": "a numeric stream_id is required"}), 400
         return jsonify(on_occupancy_query(int(raw)))
 
+    @bp.get("/occupancy_all")
+    def occupancy_all_query():  # type: ignore[no-untyped-def]
+        # Every channel with a live call, for the sidebar. Called by the Zulip
+        # patch (which then filters to the channels the requesting user may see),
+        # not by a browser. Bearer-protected like everything here.
+        if on_occupancy_all is None:
+            return jsonify({"error": "occupancy queries not supported"}), 404
+        return jsonify(on_occupancy_all())
+
     return bp
 
 
@@ -184,6 +194,7 @@ def create_app(
     on_change: Callable[[str], None] | None = None,
     on_call_created: Callable[[dict[str, Any]], None] | None = None,
     on_occupancy_query: Callable[[int], dict[str, Any]] | None = None,
+    on_occupancy_all: Callable[[], dict[str, Any]] | None = None,
     clock: Callable[[], float] = time.time,
 ) -> Flask:
     if not secret:
@@ -198,6 +209,7 @@ def create_app(
             on_change=on_change,
             on_call_created=on_call_created,
             on_occupancy_query=on_occupancy_query,
+            on_occupancy_all=on_occupancy_all,
             clock=clock,
         ),
         url_prefix=prefix,
