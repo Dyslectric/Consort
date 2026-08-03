@@ -12,13 +12,14 @@ proper in-app calling experience on top.
 
 ## Demo
 
-▶ **[Watch a walkthrough](docs/demo.mp4)** — starting a call from a conversation, the call embedded
-in Zulip, and minimize / maximize / drag-resize.
+![Zulip Meet — starting a call from a conversation, the call embedded in Zulip, and minimize / maximize / drag-resize](docs/demo.gif)
 
-<!-- To show it as an inline player at the top of this README on GitHub: drag docs/demo.mp4 into a
-     new issue or release comment to get a https://github.com/user-attachments/assets/… URL, then
-     paste that URL on its own line here. (GitHub renders an uploaded-attachment video inline; a
-     plain repo-relative path only renders as a link.) -->
+▶ **[Watch the full-quality walkthrough](docs/demo.mp4)** — 1080p60, without the GIF's compression.
+
+<!-- The GIF above (1000px, 20fps, 1.3x speed) renders inline on GitHub from the repo path. For an inline HTML5
+     *video* player instead (audio, seeking, smaller than the GIF), drag docs/demo.mp4 into a new
+     issue or release comment to get a https://github.com/user-attachments/assets/… URL and paste
+     that URL on its own line here. -->
 
 ## What it does
 
