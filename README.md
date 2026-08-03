@@ -10,6 +10,16 @@ check: any member of the organization can mint a link to any room. That is harml
 is unauthenticated anyway. This project replaces it with a real entitlement model and builds a
 proper in-app calling experience on top.
 
+## Demo
+
+▶ **[Watch a walkthrough](docs/demo.mp4)** — starting a call from a conversation, the call embedded
+in Zulip, and minimize / maximize / drag-resize.
+
+<!-- To show it as an inline player at the top of this README on GitHub: drag docs/demo.mp4 into a
+     new issue or release comment to get a https://github.com/user-attachments/assets/… URL, then
+     paste that URL on its own line here. (GitHub renders an uploaded-attachment video inline; a
+     plain repo-relative path only renders as a link.) -->
+
 ## What it does
 
 - **The conversation is the room.** The server derives an unguessable room name from the
