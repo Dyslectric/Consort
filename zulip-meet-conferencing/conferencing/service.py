@@ -212,6 +212,10 @@ class Service:
         # Only a call that actually posted has something to re-render.
         if call.message_id is not None:
             self._rerender(call)
+        # Channels post no message; their real-time signal is a push to the
+        # sidebar instead (best-effort — the client's poll is the safety net).
+        if call.stream_id is not None:
+            self._push_occupancy(call)
 
     def handle_call_created(self, notice: dict[str, Any]) -> Call | None:
         """A call was minted. Create its record and post the roster message.
@@ -256,19 +260,23 @@ class Service:
         if self.poster is None:
             return call  # posting disabled; the call is tracked, just not written
 
-        body = call_message(call, self.store.occupancy(room), None, now=now)
-        topic = str(notice.get("topic") or self.call_topic)
         try:
-            if call.stream_id is not None or call.user_ids:
-                # The hook routes on stream_id vs user_ids and authors
-                # accordingly: channel → Notification Bot, DM/group → initiator.
+            if call.stream_id is not None:
+                # Channel call: tracked for occupancy so the sidebar can show it,
+                # but deliberately no roster message. Channel calls are found
+                # through the sidebar (visibility), not a posted "Calls" message.
+                pass
+            elif call.user_ids:
+                # DM / group DM: there is no sidebar there, so it still gets a
+                # roster message, authored as the initiator so it lands in the real
+                # conversation.
                 call.message_id = self.poster.send(
                     realm_id=call.realm_id,
-                    stream_id=call.stream_id,
+                    stream_id=None,
                     user_ids=call.user_ids,
                     initiator_id=call.initiator_id,
-                    topic=topic,
-                    content=body,
+                    topic=str(notice.get("topic") or self.call_topic),
+                    content=call_message(call, self.store.occupancy(room), None, now=now),
                 )
             else:
                 logger.warning("call notice for %s had neither stream_id nor user_ids", room)
@@ -297,6 +305,26 @@ class Service:
             # sink that called us. The next occupancy event or reconcile pass
             # tries again with fresher state, which beats retrying this body.
             logger.exception("failed to update call message for room %s", call.room)
+
+    def _push_occupancy(self, call: Call) -> None:
+        """Push a channel call's occupancy to Zulip's hook, which fans it out to
+        the channel's subscribers as a client event so the sidebar updates the
+        instant someone joins or leaves. Best-effort: a failed push (or no hook
+        configured) is swallowed, because the client's slow poll heals it and a
+        sink must never fail for want of a real-time nicety."""
+        if self.poster is None or call.stream_id is None:
+            return
+        roster = self.occupancy_for_stream(call.stream_id)
+        try:
+            self.poster.occupancy(
+                realm_id=call.realm_id,
+                stream_id=call.stream_id,
+                active=bool(roster["active"]),
+                count=int(roster["count"]),
+                occupants=list(roster["occupants"]),
+            )
+        except Exception:
+            logger.debug("occupancy push failed for room %s", call.room, exc_info=True)
 
     # -- ring timeouts ----------------------------------------------------
 

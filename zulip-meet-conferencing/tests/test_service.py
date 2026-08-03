@@ -31,6 +31,7 @@ class FakePoster:
     def __init__(self, *, fail: bool = False, message_id: int = 101):
         self.updates: list[tuple[int, str]] = []
         self.sent: list[dict] = []
+        self.pushes: list[dict] = []
         self.fail = fail
         self._message_id = message_id
 
@@ -53,6 +54,12 @@ class FakePoster:
         if self.fail:
             raise RuntimeError("hook is down")
         self.updates.append((message_id, content))
+
+    def occupancy(self, *, realm_id, stream_id, active, count, occupants):
+        self.pushes.append(
+            {"realm_id": realm_id, "stream_id": stream_id,
+             "active": active, "count": count, "occupants": occupants}
+        )
 
 
 class FakeCensus:
@@ -215,39 +222,61 @@ class TestCallCreated:
     def _service(self, store, client, mid=555):
         return Service(store, client, clock=lambda: 1000.0, id_factory=lambda: "call-1")
 
-    def test_a_channel_notice_creates_the_call_and_posts_a_roster_message(self):
+    def test_a_channel_notice_creates_the_call_but_posts_no_message(self):
         store = Store()
         client = FakePoster(message_id=555)
         call = self._service(store, client).handle_call_created(
             {"room": "c-abc", "tenant": "root", "scope": "realm:1|channel:7",
              "stream_id": 7, "realm_id": 1, "initiator_id": 6}
         )
+        # The call is tracked so the sidebar can show its occupancy, but a channel
+        # call posts no roster message — channels are found through the sidebar.
         assert call.call_id == "call-1"
-        assert call.message_id == 555
+        assert call.message_id is None
         assert store.call_for_room("c-abc").call_id == "call-1"
-        assert len(client.sent) == 1
-        sent = client.sent[0]
-        # Channel post: routed by stream_id, into the call topic, in the right realm.
-        assert sent["stream_id"] == 7 and sent["topic"] == "Calls" and sent["realm_id"] == 1
-        assert sent["user_ids"] == []  # not a DM
-        assert "Call in progress" in sent["content"]
-        assert "Nobody has joined" in sent["content"]  # posted before anyone joins
+        assert client.sent == []
 
-    def test_occupancy_then_edits_that_message(self):
+    def test_a_channel_occupancy_change_pushes_to_the_sidebar(self):
+        store = Store()
+        client = FakePoster()
+        service = self._service(store, client)
+        service.handle_call_created({"room": "c-abc", "stream_id": 7, "realm_id": 1, "scope": "s"})
+        store.occupant_joined("c-abc", Occupant("j1", display_name="Ada"), now=1000)
+        service.on_occupancy_change("c-abc")
+        # No channel message, but the roster is pushed for the sidebar.
+        assert client.sent == []
+        assert client.pushes[-1]["stream_id"] == 7
+        assert client.pushes[-1]["active"] is True
+        assert client.pushes[-1]["occupants"] == [{"name": "Ada", "user_id": None}]
+
+    def test_a_destroyed_channel_room_pushes_inactive(self):
+        store = Store()
+        client = FakePoster()
+        service = self._service(store, client)
+        service.handle_call_created({"room": "c-abc", "stream_id": 7, "realm_id": 1, "scope": "s"})
+        store.occupant_joined("c-abc", Occupant("j1"), now=1000)
+        service.on_occupancy_change("c-abc")
+        store.room_destroyed("c-abc", now=1001)
+        service.on_occupancy_change("c-abc")
+        # The final push tells the sidebar the call is over so the row clears.
+        assert client.pushes[-1]["stream_id"] == 7
+        assert client.pushes[-1]["active"] is False
+
+    def test_dm_occupancy_edits_that_message(self):
         store = Store()
         client = FakePoster(message_id=555)
         service = self._service(store, client)
-        service.handle_call_created({"room": "c-abc", "stream_id": 7, "scope": "s"})
+        service.handle_call_created({"room": "c-abc", "user_ids": [1, 2], "scope": "s"})
         store.occupant_joined("c-abc", Occupant("j1", display_name="Ada"), now=1000)
         service.on_occupancy_change("c-abc")
         assert client.updates[-1][0] == 555
         assert "Ada" in client.updates[-1][1]
 
-    def test_a_duplicate_notice_does_not_post_twice(self):
+    def test_a_duplicate_dm_notice_does_not_post_twice(self):
         store = Store()
         client = FakePoster()
         service = self._service(store, client)
-        notice = {"room": "c-abc", "stream_id": 7, "scope": "s"}
+        notice = {"room": "c-abc", "user_ids": [1, 2], "scope": "s"}
         service.handle_call_created(notice)
         service.handle_call_created(notice)  # double-click / retry
         assert len(client.sent) == 1
@@ -262,16 +291,16 @@ class TestCallCreated:
         store.room_destroyed("c-abc", now=1001)  # everyone left → MUC torn down
         service.on_occupancy_change("c-abc")
         assert store.get_call("call-1").state is CallState.ENDED
-        assert "Call ended" in client.updates[-1][1]
+        assert store.call_for_room("c-abc") is None  # slot freed for the next call
 
-    def test_a_destroyed_room_ends_a_call_whose_post_failed_and_frees_the_slot(self):
-        # If the initial post failed (message_id stays None), destroying the room
-        # must still end the call and free the room's dedup slot — otherwise the
-        # channel is wedged and every later call silently no-ops until a restart.
+    def test_a_destroyed_room_ends_a_dm_call_whose_post_failed_and_frees_the_slot(self):
+        # If a DM post failed (message_id stays None), destroying the room must
+        # still end the call and free the room's dedup slot — otherwise the
+        # conversation is wedged and every later call silently no-ops until a restart.
         store = Store()
         client = FakePoster(fail=True)  # posting fails, so message_id stays None
         service = self._service(store, client)
-        service.handle_call_created({"room": "c-abc", "stream_id": 7, "scope": "s"})
+        service.handle_call_created({"room": "c-abc", "user_ids": [1, 2], "scope": "s"})
         assert store.call_for_room("c-abc").message_id is None
         store.occupant_joined("c-abc", Occupant("j1"), now=1000)
         service.on_occupancy_change("c-abc")

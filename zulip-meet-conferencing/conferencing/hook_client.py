@@ -124,3 +124,27 @@ class HookClient:
         """Edit a previously posted call message. Realm-agnostic: the message id
         is globally unique, so the hook needs nothing but the id and new body."""
         self._post("/message/update", {"message_id": message_id, "content": content})
+
+    def occupancy(
+        self,
+        *,
+        realm_id: int | None,
+        stream_id: int,
+        active: bool,
+        count: int,
+        occupants: list[dict],
+    ) -> None:
+        """Push a channel's live occupancy to Zulip, which fans it out to the
+        channel's subscribers as a ``jitsi_occupancy`` client event so the sidebar
+        updates instantly. There is no message here — channel calls post none; this
+        is the sidebar's real-time feed. The caller treats it as best-effort."""
+        self._post(
+            "/occupancy",
+            {
+                "realm_id": realm_id,
+                "stream_id": stream_id,
+                "active": active,
+                "count": count,
+                "occupants": occupants,
+            },
+        )
