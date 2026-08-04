@@ -63,6 +63,24 @@ self-host `external_api.js`). The exact django-csp settings shape is
 version-specific — the file documents both forms and how to tell which the fork
 uses.
 
+## Per-user speaking glow — `jitsi-speaking-relay.js`
+
+The call-aware sidebar lights up **each** participant who is speaking. The iframe
+API only reports the single *dominant* speaker, so per-user speaking comes from a
+small script that runs **inside** the Jitsi web app, where lib-jitsi-meet exposes
+per-participant audio levels: [`jitsi-speaking-relay.js`](jitsi-speaking-relay.js).
+It debounces those levels into a "who is speaking" set and `postMessage`s the
+display names out to Zulip; `embedded_call.ts` validates the meet origin and glows
+the matching sidebar avatars (matched by display name, so duplicate names glow
+together).
+
+- **Deploy** it in your **custom docker-jitsi-meet web image** (load it on the
+  conference page with a `<script>`) — the same surface you use for other web
+  tweaks; no Prosody or JVB change. Details in the file header.
+- **Tune** `SPEAKING_LEVEL` / `SILENCE_MS`, and verify the **local** participant
+  (your own avatar) glows — the local audio-level/name path uses web-app internals
+  that vary by Jitsi version.
+
 ## Verification status — UNPROVEN, needs the dev env
 
 This is written to
