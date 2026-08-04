@@ -4,6 +4,12 @@ Architecture document, revision 4. Revised after phases one and two were built a
 Revision 3 was written from research; this one is written from a working staging deployment
 and a patch whose tokens a real Prosody has accepted.
 
+> **AS-BUILT UPDATE (2026-08-03) — the client-side call UI has moved past §5.6.** Channels no longer
+> get a roster *message*; they surface calls through a **call-aware left sidebar** fed by a real-time
+> `jitsi_occupancy` push (service → core hook → `send_event` to the channel's subscribers), with
+> per-user speaking rings driven by an in-iframe relay (`embedded-call/jitsi-speaking-relay.js`).
+> DM/group calls keep the roster message. The [top-level README](../README.md) is the current overview.
+
 > **AS-BUILT DEVIATION (2026-08-01) — read before trusting §2.4, §4, §5.2.** Phase 0 was built and
 > the **tenancy model changed from what this document describes**. The identity layer is now
 > **multi-organization**: each team is its own Zulip organization (realm at a subdomain), and access

@@ -2,8 +2,8 @@
 
 **Conversation-scoped Jitsi video calls in Zulip.** The channel or direct message you are in
 decides which Jitsi room you can join — enforced end to end by short-lived, room-scoped tokens —
-with the call embedded and minimizable *inside* Zulip and a live roster message posted into the
-conversation.
+with the call embedded and minimizable *inside* Zulip. Channels surface who is on a call through a
+live, call-aware left sidebar; direct messages get a roster message in the conversation.
 
 Zulip ships a video-call button that opens a Jitsi room with a `Math.random()` name and no access
 check: any member of the organization can mint a link to any room. That is harmless while the room
@@ -27,12 +27,17 @@ proper in-app calling experience on top.
   channel/DM (`HMAC(key, scope‖epoch)`), mints a JWT scoped to exactly that room and tenant, and
   Prosody enforces it. You can only join the Jitsi room for a conversation you actually belong to,
   and the membership check happens on the server — not the client.
-- **The call lives in Zulip.** Clicking call opens Jitsi in an embedded, minimizable panel (mount,
-  minimize to a status bar, maximize, drag-resize) that survives switching channels — not a new tab.
-- **A live roster in the conversation.** "📹 Call in progress — Ada, Bob" is posted into the
-  channel (or the real DM/group) and edited as people join and leave, ending when the room tears
-  down. It works across organizations and in DMs — things a bot could not do — because posting goes
-  through a server-internal hook rather than a bot account.
+- **The call lives in Zulip.** Clicking call opens Jitsi in an embedded panel you can drag around,
+  minimize to a bar under the compose box, maximize, or resize — it survives switching channels,
+  rather than opening a new tab.
+- **A call-aware sidebar (channels).** A channel with a live call shows a speaker icon (a lock for
+  private channels) and the participants' avatars — with a ring on whoever is speaking — updated the
+  instant someone joins, leaves, or talks, pushed as a real-time client event rather than polled.
+  Channels are found this way instead of a posted message.
+- **A roster message (DMs & groups).** For a direct message or group, "📹 Call in progress — Ada,
+  Bob" is posted into the real conversation and edited as people come and go. It works across DMs
+  and organizations — things a bot could not do — because it is authored (as the initiator) through
+  a server-internal hook rather than a bot account.
 - **Moderator from Zulip roles.** Mute-all / kick is granted only to a channel's admins, carried in
   the token and enforced in Jitsi's Prosody.
 - **Rooms rotate.** Bumping an epoch gives a clean "start a fresh meeting" primitive and a recovery
@@ -49,24 +54,25 @@ Zulip server (patched)  ──mint room-scoped JWT──▶  browser ──join�
   │                                                                      │
   │  ◀─────────── occupancy (event_sync) ──────────────────────────────┘
   ▼
-core-hook  ◀── post / edit roster message ──  zulip-meet-conferencing  (state · render · timing)
+core-hook  ◀─ channel: push occupancy → sidebar event · DM/group: post/edit message ─  zulip-meet-conferencing
 ```
 
 1. Click call → `POST /calls/jitsi/create`: Zulip verifies you belong to the conversation, derives
    the room, and mints a short-lived JWT scoped to that room and tenant.
 2. The embedded client joins the Jitsi room with the token; Prosody validates room + tenant and sets
    moderator from the token's claim.
-3. Prosody's `event_sync` streams occupancy to **zulip-meet-conferencing**, which owns call state,
-   renders the roster, and posts/edits the message into the conversation through Zulip's internal
-   **core hook** (channels as a system bot; DMs/groups authored as the initiator, any org).
+3. Prosody's `event_sync` streams occupancy to **zulip-meet-conferencing**, which owns call state
+   and timing. Through Zulip's internal **core hook** it then either pushes a **channel's** live
+   roster to the channel's subscribers as a client event — the call-aware sidebar — or, for a **DM
+   or group**, posts and edits a roster message authored as the initiator.
 
 ## Components
 
 | Directory | What it is |
 |---|---|
-| [`zulip-meet-conferencing/`](zulip-meet-conferencing/) | The external service: occupancy, call state, roster rendering, posting via the hook. Its own repo, fully tested. |
+| [`zulip-meet-conferencing/`](zulip-meet-conferencing/) | The external service: occupancy, call state, timing; the channel occupancy push and the DM/group roster message, both via the hook. Fully tested. |
 | [`zulip-server-patch/`](zulip-server-patch/) | The Zulip server changes: the room-derivation + JWT mint, the membership-checked `calls/jitsi/create` endpoint, the internal core-hook endpoints, and the occupancy widget. |
-| [`embedded-call/`](embedded-call/) | The in-Zulip embedded call: a `JitsiMeetExternalAPI` iframe mounted at the app root, minimize/maximize/drag-resize, plus the CSP notes. |
+| [`embedded-call/`](embedded-call/) | The in-Zulip embedded call: a `JitsiMeetExternalAPI` iframe at the app root (drag/minimize/maximize/resize), the call-aware sidebar, the in-iframe speaking relay (`jitsi-speaking-relay.js`), and CSP notes. |
 | [`jitsi-token-harness/`](jitsi-token-harness/) | A standalone harness that *proves* the isolation — a token for one room or tenant is refused at another — against a real Jitsi/Prosody stack. |
 | [`docs/`](docs/) | Architecture (rev4), the Prosody `event_sync` runbook, and deployment notes. |
 
@@ -85,9 +91,10 @@ This is a working deployment, not a proof of concept — it runs in production. 
 
 ## Status
 
-Live: conversation-scoped calls, the embedded minimizable UI, channel and DM/group roster messages,
-moderator-from-Zulip-roles, and the occupancy widget. Not built yet: the direct-message *ringing*
-flow, and native mobile (a Flutter client is planned).
+Live in production: conversation-scoped calls; the embedded draggable/minimizable panel; the
+call-aware sidebar (speaker/lock icons, participant avatars, per-user speaking rings, real-time
+push); DM/group roster messages; and moderator-from-Zulip-roles. Not built yet: the direct-message
+*ringing* flow, and native mobile (a Flutter client is planned).
 
 ## License
 

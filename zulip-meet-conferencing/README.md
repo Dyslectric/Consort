@@ -141,10 +141,12 @@ last one processed. Three things have to be handled or the service looks fine an
 
 ## Status
 
-Deployed and running. Channel and direct-message calls post a roster message via the core hook,
-occupancy events edit it, and room teardown ends it. Not built yet: the **private-call (ringing)
-flow** — the state machine handles `ringing → active | declined | missed | cancelled` and the
-ticker sweeps ring timeouts, but nothing yet drives those transitions from Zulip events;
+Deployed and running. A **channel** call posts no message — occupancy changes are pushed to Zulip's
+hook (`/occupancy`), which fans them out to the channel's subscribers as a `jitsi_occupancy` client
+event for the call-aware sidebar. A **direct-message or group** call still posts a roster message via
+the hook, edited on occupancy changes, ended on room teardown. Not built yet: the **private-call
+(ringing) flow** — the state machine handles `ringing → active | declined | missed | cancelled` and
+the ticker sweeps ring timeouts, but nothing yet drives those transitions from Zulip events;
 `Service.handle_event` is the seam it attaches to.
 
 The Prosody side (`event_sync` posting to the sinks, `muc_census` for the census, and
