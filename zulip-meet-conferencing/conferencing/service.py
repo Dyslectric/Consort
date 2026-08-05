@@ -150,21 +150,44 @@ class Service:
         return people
 
     def occupancy_all(self) -> dict[str, Any]:
-        """Occupancy for every channel with a live call, for the sidebar.
+        """Occupancy for every live call, for the sidebar.
 
-        The sidebar shows call state across all of a user's channels at once, so
-        it wants every active channel call in one request rather than polling each.
-        DM calls (no ``stream_id``) are omitted — the sidebar is channels. Like
+        The sidebar shows call state across all of a user's conversations at once,
+        so it wants every active call in one request rather than polling each.
+        Channel calls are identified by ``stream_id`` and DM/group calls by their
+        ``user_ids``; a caller can tell them apart by which key is present. Like
         ``occupancy_for_stream`` this does not itself check access: its only caller
-        is the phase-two patch, which filters the result to the channels the
+        is the Zulip patch, which filters the result to the conversations the
         requesting user may actually see before it reaches a browser.
         """
-        rooms = [
-            self.occupancy_for_stream(call.stream_id)
-            for call in self.store.active_calls()
-            if call.stream_id is not None
-        ]
+        rooms = []
+        for call in self.store.active_calls():
+            if call.stream_id is not None:
+                rooms.append(self.occupancy_for_stream(call.stream_id))
+            elif call.user_ids:
+                rooms.append(self.occupancy_for_direct_message(call))
         return {"rooms": rooms}
+
+    def occupancy_for_direct_message(self, call: Call) -> dict[str, Any]:
+        """The roster for a DM/group call, shaped like ``occupancy_for_stream``.
+
+        Identified by the participant set rather than a channel, and carrying
+        ``realm_id`` so the caller can refuse to leak a call across realms.
+        """
+        base: dict[str, Any] = {
+            "user_ids": sorted(set(call.user_ids)),
+            "realm_id": call.realm_id,
+            "active": True,
+            "count": 0,
+            "occupants": [],
+            "drifted": False,
+        }
+        occupancy = self.store.occupancy(call.room)
+        if occupancy is None:
+            return base
+        if occupancy.drifted:
+            return {**base, "count": occupancy.count, "drifted": True}
+        return {**base, "count": occupancy.count, "occupants": self._widget_roster(occupancy)}
 
     # -- call bookkeeping -------------------------------------------------
 

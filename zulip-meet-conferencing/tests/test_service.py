@@ -456,14 +456,29 @@ class TestOccupancyWidget:
         )
         assert bad.status_code == 400
 
-    def test_the_occupancy_all_sink_lists_every_active_channel_call(self):
+    def test_the_occupancy_all_sink_lists_every_active_call(self):
         store = Store()
-        service = self._service(store, FakePoster(message_id=1))
+        # The shared _service helper hands out one fixed call id, which is fine
+        # for a single call but collides once a second is created, so give this
+        # one a counter.
+        ids = iter(f"call-{number}" for number in range(1, 100))
+        service = Service(
+            store,
+            FakePoster(message_id=1),
+            clock=lambda: 1000.0,
+            id_factory=lambda: next(ids),
+        )
+        # Every call needs an occupant: a room nobody has joined is not yet an
+        # active call, so creating one is not enough to make it appear here.
         service.handle_call_created({"room": "c-abc", "stream_id": 7, "scope": "s7"})
         store.occupant_joined("c-abc", Occupant("j1", display_name="Ada"), now=1000)
         service.handle_call_created({"room": "c-def", "stream_id": 9, "scope": "s9"})
-        # A direct-message call (no stream_id) is not a channel and must not appear.
-        service.handle_call_created({"room": "c-dm", "user_ids": [1, 2], "scope": "sdm"})
+        store.occupant_joined("c-def", Occupant("j2", display_name="Grace"), now=1000)
+        # A DM call is identified by its participants rather than by a channel.
+        service.handle_call_created(
+            {"room": "c-dm", "user_ids": [2, 1], "realm_id": 4, "scope": "sdm"}
+        )
+        store.occupant_joined("c-dm", Occupant("j3", display_name="Lin"), now=1000)
         app = service.make_app("s3cret", prefix="/api/v1/jitsi")
         app.config.update(TESTING=True)
         http = app.test_client()
@@ -471,10 +486,19 @@ class TestOccupancyWidget:
         assert http.get("/api/v1/jitsi/occupancy_all").status_code == 401  # no secret
         ok = http.get("/api/v1/jitsi/occupancy_all", headers={"Authorization": "Bearer s3cret"})
         assert ok.status_code == 200
-        by_stream = {room["stream_id"]: room for room in ok.get_json()["rooms"]}
-        assert set(by_stream) == {7, 9}  # channels only; the DM call is omitted
+        rooms = ok.get_json()["rooms"]
+
+        by_stream = {room["stream_id"]: room for room in rooms if "stream_id" in room}
+        assert set(by_stream) == {7, 9}
         assert by_stream[7]["occupants"] == [{"name": "Ada", "user_id": None}]
-        assert by_stream[9]["count"] == 0
+
+        direct_messages = [room for room in rooms if "user_ids" in room]
+        assert len(direct_messages) == 1
+        # Sorted, so the identity does not depend on join order.
+        assert direct_messages[0]["user_ids"] == [1, 2]
+        assert direct_messages[0]["realm_id"] == 4
+        assert direct_messages[0]["count"] == 1
+        assert direct_messages[0]["occupants"] == [{"name": "Lin", "user_id": None}]
 
 
 class TestEventDispatch:
