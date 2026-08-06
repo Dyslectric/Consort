@@ -266,23 +266,36 @@ class TestCallCreated:
         assert client.pushes[-1]["stream_id"] == 7
         assert client.pushes[-1]["active"] is False
 
-    def test_dm_occupancy_edits_that_message(self):
+    def test_a_dm_call_posts_on_the_first_join_then_edits(self):
         store = Store()
         client = FakePoster(message_id=555)
         service = self._service(store, client)
         service.handle_call_created({"room": "c-abc", "user_ids": [1, 2], "scope": "s"})
+        # Minting the link is not news, so nothing is posted yet.
+        assert client.sent == []
+
         store.occupant_joined("c-abc", Occupant("j1", display_name="Ada"), now=1000)
         service.on_occupancy_change("c-abc")
+        assert len(client.sent) == 1
+        assert "Ada" in client.sent[0]["content"]
+
+        # From then on the same message is edited, not reposted.
+        store.occupant_joined("c-abc", Occupant("j2", display_name="Grace"), now=1001)
+        service.on_occupancy_change("c-abc")
+        assert len(client.sent) == 1
         assert client.updates[-1][0] == 555
-        assert "Ada" in client.updates[-1][1]
+        assert "Grace" in client.updates[-1][1]
 
     def test_a_duplicate_dm_notice_does_not_post_twice(self):
         store = Store()
-        client = FakePoster()
+        client = FakePoster(message_id=555)
         service = self._service(store, client)
         notice = {"room": "c-abc", "user_ids": [1, 2], "scope": "s"}
         service.handle_call_created(notice)
         service.handle_call_created(notice)  # double-click / retry
+        store.occupant_joined("c-abc", Occupant("j1", display_name="Ada"), now=1000)
+        service.on_occupancy_change("c-abc")
+        service.on_occupancy_change("c-abc")  # a second event for the same join
         assert len(client.sent) == 1
 
     def test_a_destroyed_room_ends_the_call(self):
@@ -324,14 +337,21 @@ class TestCallCreated:
         service.on_occupancy_change("c-abc")
         assert store.get_call("call-1").state is CallState.ACTIVE
 
-    def test_a_direct_message_notice_posts_a_dm_authored_by_the_initiator(self):
+    def test_a_direct_message_call_posts_a_dm_authored_by_the_initiator(self):
         store = Store()
         client = FakePoster(message_id=9)
-        call = self._service(store, client).handle_call_created(
+        service = self._service(store, client)
+        call = service.handle_call_created(
             {"room": "c-dm", "user_ids": [3, 9], "initiator_id": 3, "realm_id": 1,
              "scope": "realm:1|dm:3,9"}
         )
-        assert call.message_id == 9
+        # Nothing is posted until somebody is in the call.
+        assert call.message_id is None
+        assert client.sent == []
+
+        store.occupant_joined("c-dm", Occupant("j1", display_name="Ada"), now=1000)
+        service.on_occupancy_change("c-dm")
+        assert store.call_for_room("c-dm").message_id == 9
         sent = client.sent[0]
         # DM post: routed by user_ids (no stream_id), authored by the initiator,
         # so the hook lands it in the real conversation — the thing the bot could

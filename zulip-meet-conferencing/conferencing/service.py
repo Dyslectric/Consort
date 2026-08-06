@@ -232,6 +232,15 @@ class Service:
                 call = self.store.transition(call.call_id, CallState.ENDED, now=self.clock())
             except InvalidTransition:
                 pass
+        # A DM call posts nothing until somebody is actually in it: minting a
+        # link is not news, and a roster message naming nobody reads as a call
+        # that failed. The first occupant is what makes it a call worth
+        # announcing.
+        if call.message_id is None and call.stream_id is None and call.user_ids:
+            if occupancy is not None and occupancy.count > 0:
+                self._post_direct_message_call(call, occupancy)
+            return
+
         # Only a call that actually posted has something to re-render.
         if call.message_id is not None:
             self._rerender(call)
@@ -290,17 +299,11 @@ class Service:
                 # through the sidebar (visibility), not a posted "Calls" message.
                 pass
             elif call.user_ids:
-                # DM / group DM: there is no sidebar there, so it still gets a
-                # roster message, authored as the initiator so it lands in the real
-                # conversation.
-                call.message_id = self.poster.send(
-                    realm_id=call.realm_id,
-                    stream_id=None,
-                    user_ids=call.user_ids,
-                    initiator_id=call.initiator_id,
-                    topic=str(notice.get("topic") or self.call_topic),
-                    content=call_message(call, self.store.occupancy(room), None, now=now),
-                )
+                # DM / group DM: gets a roster message, but not yet. Minting a
+                # link is not news, and a roster naming nobody reads as a call
+                # that failed, so the first person to actually join is what
+                # triggers the post (see on_occupancy_change).
+                pass
             else:
                 logger.warning("call notice for %s had neither stream_id nor user_ids", room)
         except Exception:
@@ -309,6 +312,34 @@ class Service:
             # until the next call.
             logger.exception("failed to post call message for room %s", room)
         return call
+
+    def _post_direct_message_call(self, call: Call, occupancy: Occupancy) -> None:
+        """Post a DM/group call's roster message, on the first join.
+
+        Authored as the initiator so it lands in the real conversation rather
+        than in a bot DM. Deliberately not done at mint time: see
+        ``on_occupancy_change``.
+        """
+        if self.poster is None:
+            return
+        try:
+            call.message_id = self.poster.send(
+                realm_id=call.realm_id,
+                stream_id=None,
+                user_ids=call.user_ids,
+                initiator_id=call.initiator_id,
+                topic=self.call_topic,
+                content=call_message(
+                    call,
+                    occupancy,
+                    self._join_urls.get(call.call_id),
+                    now=self.clock(),
+                ),
+            )
+        except Exception:
+            # As at mint time, a failed post must not take down the sink. The
+            # next occupancy event tries again, since message_id stays None.
+            logger.exception("failed to post call message for room %s", call.room)
 
     def _rerender(self, call: Call) -> None:
         if self.poster is None or call.message_id is None:
