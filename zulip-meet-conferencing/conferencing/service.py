@@ -239,15 +239,13 @@ class Service:
         if call.message_id is None and call.stream_id is None and call.user_ids:
             if occupancy is not None and occupancy.count > 0:
                 self._post_direct_message_call(call, occupancy)
-            return
-
-        # Only a call that actually posted has something to re-render.
-        if call.message_id is not None:
+        elif call.message_id is not None:
+            # Only a call that actually posted has something to re-render.
             self._rerender(call)
-        # Channels post no message; their real-time signal is a push to the
-        # sidebar instead (best-effort — the client's poll is the safety net).
-        if call.stream_id is not None:
-            self._push_occupancy(call)
+
+        # The sidebar's real-time signal, for channels and DMs alike
+        # (best-effort — the client's poll is the safety net).
+        self._push_occupancy(call)
 
     def handle_call_created(self, notice: dict[str, Any]) -> Call | None:
         """A call was minted. Create its record and post the roster message.
@@ -361,18 +359,25 @@ class Service:
             logger.exception("failed to update call message for room %s", call.room)
 
     def _push_occupancy(self, call: Call) -> None:
-        """Push a channel call's occupancy to Zulip's hook, which fans it out to
-        the channel's subscribers as a client event so the sidebar updates the
-        instant someone joins or leaves. Best-effort: a failed push (or no hook
-        configured) is swallowed, because the client's slow poll heals it and a
-        sink must never fail for want of a real-time nicety."""
-        if self.poster is None or call.stream_id is None:
+        """Push a call's occupancy to Zulip's hook, which fans it out as a client
+        event so the sidebar updates the instant someone joins or leaves rather
+        than on its slow poll -- which is long enough that a speaker lingers
+        visibly after the last person has gone. Best-effort: a failed push (or no
+        hook configured) is swallowed, because that poll heals it and a sink must
+        never fail for want of a real-time nicety."""
+        if self.poster is None:
             return
-        roster = self.occupancy_for_stream(call.stream_id)
+        if call.stream_id is not None:
+            roster = self.occupancy_for_stream(call.stream_id)
+        elif call.user_ids:
+            roster = self.occupancy_for_direct_message(call)
+        else:
+            return
         try:
             self.poster.occupancy(
                 realm_id=call.realm_id,
                 stream_id=call.stream_id,
+                user_ids=call.user_ids or None,
                 active=bool(roster["active"]),
                 count=int(roster["count"]),
                 occupants=list(roster["occupants"]),

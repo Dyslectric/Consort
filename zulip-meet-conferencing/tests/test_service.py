@@ -55,9 +55,11 @@ class FakePoster:
             raise RuntimeError("hook is down")
         self.updates.append((message_id, content))
 
-    def occupancy(self, *, realm_id, stream_id, active, count, occupants):
+    def occupancy(
+        self, *, realm_id, stream_id=None, user_ids=None, active, count, occupants
+    ):
         self.pushes.append(
-            {"realm_id": realm_id, "stream_id": stream_id,
+            {"realm_id": realm_id, "stream_id": stream_id, "user_ids": user_ids,
              "active": active, "count": count, "occupants": occupants}
         )
 
@@ -285,6 +287,29 @@ class TestCallCreated:
         assert len(client.sent) == 1
         assert client.updates[-1][0] == 555
         assert "Grace" in client.updates[-1][1]
+
+    def test_a_dm_call_pushes_occupancy_on_join_and_on_leave(self):
+        # Without a push, a DM row's speaker only clears on the client's slow
+        # poll, which is long enough to look broken after the last person goes.
+        store = Store()
+        client = FakePoster(message_id=555)
+        service = self._service(store, client)
+        service.handle_call_created(
+            {"room": "c-dm", "user_ids": [3, 9], "realm_id": 1, "scope": "realm:1|dm:3,9"}
+        )
+
+        store.occupant_joined("c-dm", Occupant("j1", display_name="Ada"), now=1000)
+        service.on_occupancy_change("c-dm")
+        joined = client.pushes[-1]
+        assert joined["user_ids"] == [3, 9]
+        assert joined["stream_id"] is None
+        assert joined["active"] is True and joined["count"] == 1
+
+        store.occupant_left("c-dm", "j1", now=1001)
+        service.on_occupancy_change("c-dm")
+        left = client.pushes[-1]
+        assert left["user_ids"] == [3, 9]
+        assert left["count"] == 0
 
     def test_a_duplicate_dm_notice_does_not_post_twice(self):
         store = Store()

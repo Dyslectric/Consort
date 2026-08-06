@@ -129,22 +129,26 @@ class HookClient:
         self,
         *,
         realm_id: int | None,
-        stream_id: int,
+        stream_id: int | None = None,
+        user_ids: list[int] | None = None,
         active: bool,
         count: int,
         occupants: list[dict],
     ) -> None:
-        """Push a channel's live occupancy to Zulip, which fans it out to the
-        channel's subscribers as a ``jitsi_occupancy`` client event so the sidebar
-        updates instantly. There is no message here — channel calls post none; this
-        is the sidebar's real-time feed. The caller treats it as best-effort."""
-        self._post(
-            "/occupancy",
-            {
-                "realm_id": realm_id,
-                "stream_id": stream_id,
-                "active": active,
-                "count": count,
-                "occupants": occupants,
-            },
-        )
+        """Push a conversation's live occupancy to Zulip, which fans it out as a
+        ``jitsi_occupancy`` client event so the sidebar updates instantly rather
+        than on its slow poll. Identified by ``stream_id`` for a channel or
+        ``user_ids`` for a DM/group; Zulip sends the event to that channel's
+        subscribers or to those participants. The caller treats it as
+        best-effort."""
+        payload: dict[str, Any] = {
+            "realm_id": realm_id,
+            "active": active,
+            "count": count,
+            "occupants": occupants,
+        }
+        if stream_id is not None:
+            payload["stream_id"] = stream_id
+        else:
+            payload["user_ids"] = user_ids or []
+        self._post("/occupancy", payload)
