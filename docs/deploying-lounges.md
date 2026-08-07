@@ -1,9 +1,13 @@
 # Deploying lounges, guest access and call door policies
 
-The batch built 2026-08-06/07: lounges and rooms, room settings, knock/admit,
-anonymous guest tokens, and `call_door_policy`. Three things move, and one of
-them is a set of Jitsi settings that no file in this repository can carry for
-you.
+The batch built 2026-08-06/07: lounges and rooms, room settings, knock/admit for
+account holders **and for anonymous visitors**, guest call tokens, and
+`call_door_policy`. Three things move, and one of them is a set of Jitsi settings
+that no file in this repository can carry for you.
+
+Nothing in the visitor-knocking half needs a migration, a setting or a secret —
+it is cache-only. The schema changes are all in the first commit
+(`0811`–`0816`).
 
 Read [`lounges.md`](lounges.md) for what the feature *is*. This is only how to
 get it onto the live stack.
@@ -107,6 +111,13 @@ carefully rather than untangle it.
 
 ## 3. The Jitsi settings — the part no file here can do for you
 
+> **Applied to the live meet stack on 2026-08-07.** Kept here because it is the
+> reference for any fresh deployment, and because **editing `.env` changes
+> nothing until the containers are recreated** — `docker compose up -d prosody
+> jicofo web`, then run the verification block at the end of this section. A
+> stack that was only edited, not restarted, looks exactly like one that was
+> never configured.
+
 In the meet stack's `.env`. All five, and the deployment is only as good as the
 weakest:
 
@@ -184,6 +195,10 @@ members are having, and cannot hold one among themselves.
 3. Set a web-public channel to `authenticated_user`, have a visitor try to join
    with nobody inside (refused, with a reason shown), then with a member inside
    (admitted).
+3b. In a web-public lounge, make a room private and tick **"Let guests ask to be
+   admitted"** — it defaults to off, so without it a visitor is shown nothing and
+   the feature looks broken. A logged-out visitor should then get an ask control,
+   be prompted for a name, and join automatically once a moderator admits them.
 4. A lounge: start a room, check it appears in the sidebar with its occupants,
    and that it disappears when the last person leaves.
 
@@ -191,8 +206,8 @@ members are having, and cannot hold one among themselves.
 
 - **Mobile.** Lounges are a desktop/web sidebar feature; the Flutter client knows
   nothing about them.
-- **Anonymous guests cannot knock.** Being admitted means being added to a set of
-  Zulip accounts, so a visitor with no account cannot be admitted at all.
+- **A guest's knock lives in one browser tab**, so a visitor who reloads while
+  waiting to be let in has to ask again.
 - **Group-based tenanting and anonymous guests do not compose.** If
   `JITSI_TENANT_BY_GROUP` is set, a visitor lands in the default tenant and may
   not be where the members are. See `lounges.md`.

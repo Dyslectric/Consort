@@ -216,11 +216,34 @@ opens; there is no second answer to "may this user enter" to keep in step with
 the first. `POST .../admit` is additive rather than a whole-set PATCH so two
 moderators answering two knocks at once cannot undo each other.
 
-**Knocking is about Zulip accounts, not anonymous visitors.** Being admitted means
-being added to a set of `UserProfile`s, so a visitor with no account could not be
-admitted even if the room wanted to. `knockable_by_guests` therefore means guest
-*accounts*; an earlier version of this doc and the model comment said
-"unauthenticated visitors", which was never what the code did.
+**Visitors knock differently, and it took a second mechanism.** Being admitted as
+an account holder means being added to a set of `UserProfile`s, which a visitor
+cannot be in — so for a while this was documented as impossible. What was missing
+is that being admitted does not have to mean *becoming a member of a set*; it only
+has to mean *this one person may come through, now*.
+
+So a visitor's knock is a short-lived capability (`zerver/lib/guest_knocks.py`):
+an unguessable id, minted when they ask, marked admitted when a moderator says
+yes, and **spent on the way in**. It is good for one room and one entry, and it
+expires on its own — a moderator who says yes is saying yes to the person they
+looked at, not to whoever that id gets passed to.
+
+Two consequences worth knowing:
+
+- **A visitor is asked for a name before they may knock.** A moderator deciding
+  whether to admit "Guest" has been told nothing at all. The name is marked as a
+  guest's once, when the knock is made, and that same string is what the room
+  shows if they are let in — so a moderator cannot admit "Sam (guest)" and get
+  somebody else's wording in the call. (The first version marked it twice and
+  produced "Sam (guest) (guest)"; a test now pins it.)
+- **The visitor polls for the answer** (`GET /calls/jitsi/knock_status`). They
+  hold no Zulip account and so have no event queue to push to. The `lounge_knock`
+  event carries `guest_knock_id` and `guest_name` instead of a `user_id`, which is
+  how a client tells the two kinds of knocker apart.
+
+`knockable_by_guests` governs both: it now genuinely means "unauthenticated
+visitors may ask", which is what the model comment originally claimed and the code
+did not yet do.
 
 ## Three doors, and presence is cached rather than stored
 
@@ -320,7 +343,10 @@ Nothing from the original list. Remaining known gaps:
   mapped group, the visitor lands in a tenant the members are not in. Fixing it
   means deriving the tenant from the channel rather than from who is joining,
   which changes how every existing call is routed.
-- **A guest cannot knock**, by construction — see above.
+- **A guest's knock lives in one browser tab.** The knock id is held in memory
+  and nowhere else, so a visitor who reloads while waiting has to ask again. That
+  is the same rule every other knock follows, but it is more visible here because
+  a visitor may be waiting a while.
 - **Occupancy for visitors is filtered to web-public channels**, and
   `reconcile_lounge_rooms` deliberately does not run on the anonymous path: it
   deletes rows, and an unauthenticated request should not be what causes that.
@@ -408,6 +434,13 @@ Nothing from the original list. Remaining known gaps:
   `stream_to_dict`, but `update_stream_backend` never accepted it and no UI set
   it — so the setting could not be turned on at all. Check the view's parameter
   list, not just the model.
+- **`hidden-for-spectators` is applied per control, so a new one starts hidden.**
+  The join button was given a web-public exception when guest access landed; the
+  ask-to-join button was not, so visitors could be told `can_knock: true` by the
+  server and still see nothing. The server's `can_join`/`can_knock` already
+  account for who is asking, so the class is now derived once
+  (`spectator_suffix`) rather than written at each control — writing it twice is
+  exactly how the two came apart.
 - **A `<select>` rendered by `dropdown_options_widget` has no selected option.**
   The current value is put in afterwards, by hand, next to
   `$("#id_topics_policy").val(...)` in `stream_edit.ts`. Miss it and the control
