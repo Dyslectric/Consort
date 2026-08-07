@@ -434,6 +434,14 @@ Nothing from the original list. Remaining known gaps:
   `stream_to_dict`, but `update_stream_backend` never accepted it and no UI set
   it — so the setting could not be turned on at all. Check the view's parameter
   list, not just the model.
+- **A visitor has no event queue, so nothing pushed ever reaches them.** The
+  `lounge_rooms` event — the thing that tells everybody else a room was started,
+  locked, or opened to knocking — goes to *subscribers*, and a visitor is not
+  one. Their room list was therefore frozen at page load: a room made
+  non-knockable still offered them an ask control, and a room started after they
+  arrived never appeared. They now poll, at the occupancy poll's cadence, for the
+  same reason the knock status is polled — there is nowhere to push to. Anything
+  else built for visitors needs the same treatment; assume no event will arrive.
 - **`hidden-for-spectators` is applied per control, so a new one starts hidden.**
   The join button was given a web-public exception when guest access landed; the
   ask-to-join button was not, so visitors could be told `can_knock: true` by the
