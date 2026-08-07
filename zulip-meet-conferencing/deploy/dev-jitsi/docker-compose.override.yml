@@ -1,0 +1,39 @@
+# docker-compose.override.yml for a LOCAL docker-jitsi-meet used in development.
+#
+# Differs from deploy/prosody/docker-compose.override.example.yml in exactly two
+# ways, both because the conferencing service is not a container here:
+#
+#   * there is no `conferencing` service — the stub runs as a plain process on
+#     the host, so it can be restarted and read without touching Docker;
+#   * Prosody needs a route off the bridge network to reach it, hence
+#     host.docker.internal and the extra_hosts fallback.
+#
+# Everything else — the custom Prosody image, the plugins-custom mount, the
+# reason both exist — is the same, and deploy/prosody/ is where that is explained.
+#
+# Copy this to the docker-jitsi-meet checkout as docker-compose.override.yml.
+# See README.md in this directory for the full sequence.
+
+services:
+  prosody:
+    build:
+      context: ./prosody-custom
+      args:
+        JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-stable-9955}
+    image: local/jitsi-prosody-dev:${JITSI_IMAGE_VERSION:-stable-9955}
+    environment:
+      # docker-jitsi-meet forwards only a curated list of variables into the
+      # container, so this has to be named explicitly — putting it in .env alone
+      # does not reach Prosody, and the only symptom is a 401 on every event.
+      EVENT_SYNC_SECRET: ${EVENT_SYNC_SECRET}
+    extra_hosts:
+      # Docker Desktop provides this name already; plain Linux Docker does not,
+      # and without it every event POST fails to resolve.
+      - "host.docker.internal:host-gateway"
+
+# Deliberately no `volumes:` here. The base docker-compose.yml already mounts
+# ${CONFIG}/prosody/prosody-plugins-custom into /prosody-plugins-custom, which is
+# where both mod_event_sync_component.lua and event_sync.cfg.lua go. Re-declaring
+# it with a path relative to this file would silently shadow that with a
+# different, empty directory — the component would never load, and the only
+# symptom would be rosters that stay empty.
