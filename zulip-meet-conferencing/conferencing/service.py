@@ -162,11 +162,46 @@ class Service:
         """
         rooms = []
         for call in self.store.active_calls():
-            if call.stream_id is not None:
+            if call.lounge_room_id is not None:
+                # Checked before stream_id, which a lounge room also carries: it
+                # is the lounge the room is in, not a call of the lounge's own.
+                rooms.append(self.occupancy_for_lounge_room(call))
+            elif call.stream_id is not None:
                 rooms.append(self.occupancy_for_stream(call.stream_id))
             elif call.user_ids:
                 rooms.append(self.occupancy_for_direct_message(call))
         return {"rooms": rooms}
+
+    def occupancy_for_lounge_room(self, call: Call) -> dict[str, Any]:
+        """The roster for one room inside a lounge.
+
+        Keyed off the call record rather than off the channel, because a lounge
+        holds many rooms at once and the channel no longer identifies which one.
+        Carries ``stream_id`` as well so the caller can apply the same channel
+        access check it uses for everything else — being able to see the lounge
+        is what entitles you to know a room in it exists.
+        """
+        base: dict[str, Any] = {
+            "stream_id": call.stream_id,
+            "lounge_room_id": call.lounge_room_id,
+            "realm_id": call.realm_id,
+            # Read off the call rather than assumed, because this is what tells
+            # Zulip the room is over. `occupancy_for_stream` gets the same answer
+            # by failing to find a live call for the channel; a lounge room is
+            # handed its call directly, so it has to ask the call itself.
+            "active": not call.state.is_terminal,
+        }
+        occupancy = self.store.occupancy(call.room)
+        if occupancy is None:
+            return {**base, "count": 0, "occupants": [], "drifted": False}
+        if occupancy.drifted:
+            return {**base, "count": occupancy.count, "occupants": [], "drifted": True}
+        return {
+            **base,
+            "count": occupancy.count,
+            "occupants": self._widget_roster(occupancy),
+            "drifted": False,
+        }
 
     def occupancy_for_direct_message(self, call: Call) -> dict[str, Any]:
         """The roster for a DM/group call, shaped like ``occupancy_for_stream``.
@@ -266,6 +301,7 @@ class Service:
 
         now = self.clock()
         stream_id = notice.get("stream_id")
+        lounge_room_id = notice.get("lounge_room_id")
         initiator_id = notice.get("initiator_id")
         realm_id = notice.get("realm_id")
         call = Call(
@@ -278,6 +314,7 @@ class Service:
             state=CallState.ACTIVE,
             created_at=now,
             stream_id=stream_id if isinstance(stream_id, int) else None,
+            lounge_room_id=lounge_room_id if isinstance(lounge_room_id, int) else None,
             user_ids=[int(u) for u in (notice.get("user_ids") or [])],
             initiator_id=initiator_id if isinstance(initiator_id, int) else None,
             realm_id=realm_id if isinstance(realm_id, int) else None,
@@ -367,7 +404,9 @@ class Service:
         never fail for want of a real-time nicety."""
         if self.poster is None:
             return
-        if call.stream_id is not None:
+        if call.lounge_room_id is not None:
+            roster = self.occupancy_for_lounge_room(call)
+        elif call.stream_id is not None:
             roster = self.occupancy_for_stream(call.stream_id)
         elif call.user_ids:
             roster = self.occupancy_for_direct_message(call)
@@ -378,6 +417,11 @@ class Service:
                 realm_id=call.realm_id,
                 stream_id=call.stream_id,
                 user_ids=call.user_ids or None,
+                # Zulip does more than fan this out for a lounge room: an empty
+                # one means the room is over, and the row that represents it is
+                # deleted. This push is therefore the room's end-of-life notice,
+                # not only a sidebar update.
+                lounge_room_id=call.lounge_room_id,
                 active=bool(roster["active"]),
                 count=int(roster["count"]),
                 occupants=list(roster["occupants"]),

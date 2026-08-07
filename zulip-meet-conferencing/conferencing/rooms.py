@@ -65,6 +65,18 @@ def direct_message_scope(realm_id: int, user_ids: list[int]) -> str:
     return f"realm:{realm_id}|dm:" + ",".join(str(user_id) for user_id in sorted(set(user_ids)))
 
 
+def lounge_room_scope(realm_id: int, stream_id: int, room_id: int) -> str:
+    """A room inside a lounge.
+
+    Unlike the two above, the service never derives this one for itself: a lounge
+    holds many rooms and their ids come from Zulip, so the room name arrives in
+    the ``calls/created`` notice rather than being worked out. It is mirrored here
+    for the same reason the others are — the derivation is a contract between two
+    repositories, and a contract only one side writes down is one that drifts.
+    """
+    return f"realm:{realm_id}|lounge:{stream_id}|room:{room_id}"
+
+
 def derive_room_name(room_key: str, scope: str, epoch: int) -> str:
     """Identical to the calls patch. Changing one without the other breaks both."""
     digest = hmac.new(room_key.encode(), f"{scope}|{epoch}".encode(), hashlib.sha256).hexdigest()

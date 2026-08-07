@@ -56,10 +56,12 @@ class FakePoster:
         self.updates.append((message_id, content))
 
     def occupancy(
-        self, *, realm_id, stream_id=None, user_ids=None, active, count, occupants
+        self, *, realm_id, stream_id=None, user_ids=None, lounge_room_id=None,
+        active, count, occupants
     ):
         self.pushes.append(
             {"realm_id": realm_id, "stream_id": stream_id, "user_ids": user_ids,
+             "lounge_room_id": lounge_room_id,
              "active": active, "count": count, "occupants": occupants}
         )
 
@@ -254,6 +256,62 @@ class TestCallCreated:
         assert client.pushes[-1]["stream_id"] == 7
         assert client.pushes[-1]["active"] is True
         assert client.pushes[-1]["occupants"] == [{"name": "Ada", "user_id": None}]
+
+    def test_a_lounge_room_is_tracked_apart_from_its_lounge(self):
+        """A lounge carries many live rooms at once, all stamped with the same
+        stream_id. Without the room id they would collapse into one another and
+        the first one started would answer for the whole lounge."""
+        store = Store()
+        # Two calls, so unlike every other test here they need two ids.
+        ids = iter(["call-1", "call-2"])
+        service = Service(
+            store, FakePoster(), clock=lambda: 1000.0, id_factory=lambda: next(ids)
+        )
+        service.handle_call_created(
+            {"room": "c-one", "stream_id": 7, "realm_id": 1, "scope": "s", "lounge_room_id": 11}
+        )
+        service.handle_call_created(
+            {"room": "c-two", "stream_id": 7, "realm_id": 1, "scope": "s", "lounge_room_id": 12}
+        )
+
+        rooms = service.occupancy_all()["rooms"]
+        assert sorted(r["lounge_room_id"] for r in rooms) == [11, 12]
+        assert all(r["stream_id"] == 7 for r in rooms)
+
+        # A lounge has no channel-level call of its own, so looking for one finds
+        # nothing rather than finding whichever room happened to start first.
+        assert store.active_call_for_stream(7) is None
+
+    def test_a_lounge_room_pushes_its_own_room_id(self):
+        store = Store()
+        client = FakePoster()
+        service = self._service(store, client)
+        service.handle_call_created(
+            {"room": "c-one", "stream_id": 7, "realm_id": 1, "scope": "s", "lounge_room_id": 11}
+        )
+        store.occupant_joined("c-one", Occupant("j1", display_name="Ada"), now=1000)
+        service.on_occupancy_change("c-one")
+
+        assert client.pushes[-1]["lounge_room_id"] == 11
+        assert client.pushes[-1]["stream_id"] == 7
+        assert client.pushes[-1]["occupants"] == [{"name": "Ada", "user_id": None}]
+
+    def test_an_emptied_lounge_room_pushes_inactive(self):
+        """That push is the room's end-of-life notice: Zulip deletes the row on
+        the strength of it, which is what makes an idle lounge empty."""
+        store = Store()
+        client = FakePoster()
+        service = self._service(store, client)
+        service.handle_call_created(
+            {"room": "c-one", "stream_id": 7, "realm_id": 1, "scope": "s", "lounge_room_id": 11}
+        )
+        store.occupant_joined("c-one", Occupant("j1"), now=1000)
+        service.on_occupancy_change("c-one")
+        store.room_destroyed("c-one", now=1001)
+        service.on_occupancy_change("c-one")
+
+        assert client.pushes[-1]["lounge_room_id"] == 11
+        assert client.pushes[-1]["active"] is False
 
     def test_a_destroyed_channel_room_pushes_inactive(self):
         store = Store()

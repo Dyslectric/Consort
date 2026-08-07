@@ -131,6 +131,7 @@ class HookClient:
         realm_id: int | None,
         stream_id: int | None = None,
         user_ids: list[int] | None = None,
+        lounge_room_id: int | None = None,
         active: bool,
         count: int,
         occupants: list[dict],
@@ -140,7 +141,12 @@ class HookClient:
         than on its slow poll. Identified by ``stream_id`` for a channel or
         ``user_ids`` for a DM/group; Zulip sends the event to that channel's
         subscribers or to those participants. The caller treats it as
-        best-effort."""
+        best-effort.
+
+        A room inside a lounge sends both ``stream_id`` (the lounge, whose
+        subscribers hear about it) and ``lounge_room_id`` (which of its rooms).
+        That second key does more work than routing: an empty room is a room that
+        has ended, and Zulip deletes the row on the strength of this call."""
         payload: dict[str, Any] = {
             "realm_id": realm_id,
             "active": active,
@@ -151,4 +157,6 @@ class HookClient:
             payload["stream_id"] = stream_id
         else:
             payload["user_ids"] = user_ids or []
+        if lounge_room_id is not None:
+            payload["lounge_room_id"] = lounge_room_id
         self._post("/occupancy", payload)

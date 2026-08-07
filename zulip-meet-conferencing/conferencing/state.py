@@ -108,6 +108,11 @@ class Call:
     created_at: float
     stream_id: int | None = None
     user_ids: list[int] = field(default_factory=list)
+    #: Set when this call is a room inside a lounge rather than a channel's own
+    #: call. ``stream_id`` is still the lounge, because that is whose subscribers
+    #: hear about it, so the two are not alternatives: this is what distinguishes
+    #: one of a lounge's many rooms from the single call an ordinary channel has.
+    lounge_room_id: int | None = None
     initiator_id: int | None = None
     #: The realm the conversation lives in. The core-hook send path needs it to
     #: post into the right org; absent for records created before it was carried.
@@ -183,10 +188,20 @@ class Store:
         channel (``create_call`` enforces one active call per room, and a channel
         maps to one room per epoch), so returning the first non-terminal match is
         unambiguous.
+
+        Lounge rooms are skipped, and the "at most one" above is why they have to
+        be: a lounge carries many live rooms at once, all of them stamped with the
+        lounge's stream_id, so without this the first one started would answer for
+        the whole lounge and the rest would be invisible. A lounge has no
+        channel-level call of its own to find.
         """
         with self._lock:
             for call in self._calls.values():
-                if call.stream_id == stream_id and not call.state.is_terminal:
+                if (
+                    call.stream_id == stream_id
+                    and call.lounge_room_id is None
+                    and not call.state.is_terminal
+                ):
                     return call
             return None
 
