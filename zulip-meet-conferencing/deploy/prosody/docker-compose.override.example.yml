@@ -17,7 +17,30 @@
 #        cp event_sync.cfg.lua ./config/prosody/prosody-plugins-custom/
 #   4. Put deploy/prosody/Dockerfile at ./prosody-custom/Dockerfile
 #   5. Set EVENT_SYNC_SECRET=<value> once in .env (used by both services below).
-#   6. docker compose build prosody && docker compose up -d --force-recreate prosody conferencing
+#   6. Set these in .env as well, or the JWT's moderator claim means nothing:
+#
+#        ENABLE_AUTO_OWNER=false   # else Jicofo gives owner to whoever joins first,
+#                                  # overriding the token and handing the room to
+#                                  # a passer-by. Defaults to TRUE when unset.
+#        JICOFO_ENABLE_AUTH=0      # THE ONE THAT ACTUALLY BIT. Jicofo has its own
+#                                  # authentication path, separate from auto-owner,
+#                                  # and this defaults to ENABLE_AUTH. With
+#                                  # AUTH_TYPE=jwt it grants ownership to EVERY
+#                                  # holder of a valid token — anonymous guests
+#                                  # included, their tokens being valid by design.
+#                                  # Symptom: a guest ending the meeting for all.
+#                                  # Prosody still gates entry and still decides
+#                                  # moderator; this only stops Jicofo overriding.
+#        DISABLE_PROFILE=true      # else the display name from the token is only a
+#                                  # suggestion: anyone can rename themselves in the
+#                                  # Jitsi UI, which makes a guest's "(guest)" marker
+#                                  # worthless. This is what isNameReadOnly() reads.
+#        HIDE_PREJOIN_DISPLAY_NAME=true   # so the prejoin screen stops offering a
+#                                         # field that no longer does anything.
+#
+#      (The matching XMPP_MUC_MODULES goes in the service block below, because
+#      docker-jitsi-meet only forwards a curated env list to the container.)
+#   7. docker compose build prosody && docker compose up -d --force-recreate prosody conferencing
 #
 # The Dockerfile appends `Include "/prosody-plugins-custom/*.cfg.lua"` to the main
 # config template, so the .cfg.lua in the persistent plugins-custom dir is loaded
@@ -37,10 +60,14 @@ services:
       # jitsi-meet only forwards a curated env list, so it must be named explicitly
       # here — .env alone does not reach the Prosody container.
       EVENT_SYNC_SECRET: ${EVENT_SYNC_SECRET}
-      # Phase B only — enables the (already-present) muc_census module on
-      # muc.meet.jitsi. Leave commented for Phase A so there is one change at a time.
-      # XMPP_MUC_MODULES: muc_census
-      # (comma-separate if you already set other custom MUC modules)
+      # Loads the module that reads context.user.moderator out of the JWT and
+      # sets the occupant's affiliation from it. It ships in the image but is NOT
+      # in the MUC component's modules_enabled by default — without this line
+      # nothing reads the claim, and every moderator decision Zulip makes is
+      # decorative. Must be paired with ENABLE_AUTO_OWNER=false (see .env below).
+      #
+      # Add muc_census here in Phase B: `token_affiliation,muc_census`.
+      XMPP_MUC_MODULES: token_affiliation
     volumes:
       # Plugin code + the rendered event_sync.cfg.lua, both persistent.
       - ./config/prosody/prosody-plugins-custom:/prosody-plugins-custom:ro
