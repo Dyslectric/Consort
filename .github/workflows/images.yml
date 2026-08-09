@@ -1,0 +1,223 @@
+---
+# Build and publish the four images the deployment pulls.
+#
+# Three of them are thin and build in a couple of minutes, so they are built for
+# both architectures in one go under emulation. Zulip is not: it compiles the
+# server and its frontend from source, and under QEMU that turns 30 minutes into
+# most of a day. So it is built on a native runner per architecture and the two
+# results are stitched into one manifest afterwards — which is why that half of
+# this file is three jobs rather than one.
+#
+# AFTER THE FIRST SUCCESSFUL RUN: GHCR creates new packages as *private*, even
+# from a public repository, and a private package is exactly as useless to a
+# stranger as no package at all. For each of the four, open its page under the
+# org's Packages tab -> Package settings -> change visibility to Public, and
+# connect it to this repository while you are there.
+
+name: images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      zulip_git_ref:
+        description: "Ref of the Zulip fork to build"
+        default: lounges
+      jitsi_image_version:
+        description: "Upstream Jitsi image tag to layer on"
+        default: unstable-2026-06-25
+
+env:
+  # Must agree with JITSI_IMAGE_VERSION in deploy/.env.example: prosody and web
+  # are layered on this, while jicofo and jvb are pulled at it directly, and a
+  # mismatched set is a bad afternoon. Note that a docker-jitsi-meet *release*
+  # tag is not an *image* tag — the published ones are dated unstable-YYYY-MM-DD.
+  JITSI_IMAGE_VERSION: ${{ inputs.jitsi_image_version || 'unstable-2026-06-25' }}
+  ZULIP_GIT_URL: https://github.com/Dyslectric/zulip-meet-integration
+  ZULIP_GIT_REF: ${{ inputs.zulip_git_ref || 'lounges' }}
+  # The build context for docker-zulip's own Dockerfile, pinned to the same tag
+  # as deploy/vendor/docker-zulip/compose.yaml so the image and the compose file
+  # that runs it come from one release.
+  DOCKER_ZULIP_CONTEXT: "https://github.com/zulip/docker-zulip.git#12.1-0"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The three quick ones
+  # ---------------------------------------------------------------------------
+  thin:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: conferencing
+            context: zulip-meet-conferencing
+            dockerfile: zulip-meet-conferencing/Dockerfile
+          # Both Jitsi images take the repository root as their context, because
+          # each needs a file from outside its own directory: the speaking relay
+          # in embedded-call/, the Lua in jitsi-token-harness/ and
+          # zulip-meet-conferencing/. The root .dockerignore keeps that small.
+          - name: prosody
+            context: .
+            dockerfile: deploy/images/prosody/Dockerfile
+          - name: web
+            context: .
+            dockerfile: deploy/images/web/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase the owner
+        id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-${{ matrix.name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            JITSI_IMAGE_VERSION=${{ env.JITSI_IMAGE_VERSION }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # ---------------------------------------------------------------------------
+  # Zulip: one native runner per architecture, merged afterwards
+  # ---------------------------------------------------------------------------
+  zulip:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+          # Free for public repositories, and the only way this build finishes
+          # in a reasonable time for ARM.
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    steps:
+      - name: Reclaim disk
+        # A hosted runner ships with several toolchains this build will never
+        # use, and a Zulip image plus its build cache does not fit alongside
+        # them. The failure without this is an opaque "no space left on device"
+        # forty minutes in.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Lowercase the owner
+        id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          # docker-zulip's own context, fetched straight from git, so there is no
+          # second copy of it in this repository to keep in step.
+          context: ${{ env.DOCKER_ZULIP_CONTEXT }}
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            ZULIP_GIT_URL=${{ env.ZULIP_GIT_URL }}
+            ZULIP_GIT_REF=${{ env.ZULIP_GIT_REF }}
+          # No tag here: each architecture is pushed as a bare digest and the
+          # next job assembles them into one multi-arch tag. Tagging both would
+          # mean whichever finished last silently won.
+          outputs: type=image,name=ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-server,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Record the digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${{ steps.build.outputs.digest }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  zulip-manifest:
+    needs: [zulip]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Lowercase the owner
+        id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-server
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Assemble the multi-arch tag
+        working-directory: /tmp/digests
+        run: |
+          # Both expansions are meant to split: the first into one -t per tag,
+          # the second into one image reference per architecture digest. Quoting
+          # either would hand imagetools a single argument containing spaces.
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
+            $(printf 'ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-server@sha256:%s ' *)
