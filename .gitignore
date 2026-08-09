@@ -31,6 +31,9 @@ secrets.conf
 # Node
 node_modules/
 
+# Build artifacts produced when syncing the service to a server
+conferencing.zip
+
 # Claude Code local harness config (machine-specific paths, permissions)
 .claude/
 
