@@ -13,3 +13,6 @@ current overview, and these as the "why it's built this way" underneath it.
 - **[prosody-event-sync.md](prosody-event-sync.md)** — the Prosody side: the `event_sync` component
   that streams occupancy to the conferencing service, `muc_census` for reconciliation, and how the
   plugins are delivered via a custom Prosody image.
+- **[federation.md](federation.md)** — *design, not yet built.* One key, many servers: a portable
+  Ed25519 identity, a shell that keeps a server list, and the challenge/response that turns it into
+  a Zulip session. Identity federates; channels and calls deliberately do not.
