@@ -17,8 +17,13 @@
 # then switch BACK to 1000, or Prosody refuses to run ("Danger, Will Robinson!
 # Prosody doesn't need to be run as root").
 
-ARG JITSI_IMAGE_VERSION=stable-11146-1
-FROM jitsi/prosody:${JITSI_IMAGE_VERSION}
+# Defaults match deploy/.env.example. ghcr.io rather than Docker Hub for the same
+# reason the compose files use it: it is where docker-jitsi-meet publishes, and it
+# has no anonymous pull limit to trip over in CI. Note that a docker-jitsi-meet
+# *release* tag is not an *image* tag — the published ones are dated.
+ARG JITSI_IMAGE_REPO=ghcr.io/jitsi
+ARG JITSI_IMAGE_VERSION=unstable-2026-06-25
+FROM ${JITSI_IMAGE_REPO}/prosody:${JITSI_IMAGE_VERSION}
 
 USER root
 

@@ -15,8 +15,12 @@
 # COPY --from writes as root regardless of the active USER. The result is that
 # the published image's user is whatever upstream chose, untouched.
 
+# Defaults match deploy/.env.example. ghcr.io rather than Docker Hub for the same
+# reason the compose files use it: it is where docker-jitsi-meet publishes, and it
+# has no anonymous pull limit to trip over in CI.
+ARG JITSI_IMAGE_REPO=ghcr.io/jitsi
 ARG JITSI_IMAGE_VERSION=unstable-2026-06-25
-FROM jitsi/web:${JITSI_IMAGE_VERSION} AS base
+FROM ${JITSI_IMAGE_REPO}/web:${JITSI_IMAGE_VERSION} AS base
 
 FROM base AS builder
 USER root
