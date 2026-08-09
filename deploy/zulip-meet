@@ -1,0 +1,540 @@
+#!/usr/bin/env bash
+#
+# Zulip Meet — bring the whole stack up on one machine.
+#
+#   ./zulip-meet up          everything: check, generate, pull, start, bootstrap, verify
+#   ./zulip-meet trust       how to make the browser trust the local certificate
+#   ./zulip-meet verify      re-run the checks against a running stack
+#   ./zulip-meet down        stop, keeping all data
+#   ./zulip-meet destroy     stop and delete every volume, secret and generated file
+#
+# `up` is idempotent: run it again after editing .env and it reconciles rather
+# than starting over. It never overwrites an existing .env or secret.
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# Git Bash rewrites anything in an argument that looks like a Unix path into a
+# Windows one before the program sees it, so a *container* path such as
+# /home/zulip/deployments/current/manage.py arrives at docker as
+# C:/Program Files/Git/home/zulip/... and the command fails for a reason nothing
+# in the output explains. Harmless everywhere else — these are simply unset.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; YELLOW=$'\033[33m'
+    GREEN=$'\033[32m'; RESET=$'\033[0m'
+else
+    BOLD=''; DIM=''; RED=''; YELLOW=''; GREEN=''; RESET=''
+fi
+
+say()  { printf '%s\n' "$*"; }
+step() { printf '\n%s==>%s %s\n' "$BOLD" "$RESET" "$*"; }
+ok()   { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn() { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
+bad()  { printf '  %s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
+die()  { printf '\n%serror:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Configuration access
+# ---------------------------------------------------------------------------
+
+# Read one value out of .env without sourcing it — .env is data, and sourcing it
+# would execute anything a stray backtick happened to spell.
+env_get() {
+    [ -f .env ] || return 0
+    sed -n "s/^$1=//p" .env | tail -n 1
+}
+
+# Rewrite one value in place, adding it if absent. Used by bootstrap to record
+# the bot's credentials, which cannot exist until Zulip has booted.
+env_set() {
+    local key=$1 value=$2
+    if grep -q "^${key}=" .env; then
+        # A literal replacement: the value can contain slashes and & signs.
+        awk -v k="$key" -v v="$value" \
+            'BEGIN{FS=OFS="="} $1==k {print k "=" v; next} {print}' .env > .env.tmp
+        mv .env.tmp .env
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+    chmod 600 .env
+}
+
+# 32 bytes of hex. openssl is not guaranteed to be present; /dev/urandom is.
+random_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    else
+        od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+    fi
+}
+
+compose() { docker compose "$@"; }
+
+# ---------------------------------------------------------------------------
+# preflight
+# ---------------------------------------------------------------------------
+
+cmd_preflight() {
+    step "Checking this machine"
+    local failed=0
+
+    command -v docker >/dev/null 2>&1 || {
+        bad "docker is not on PATH."
+        say "      On Windows this usually means Docker Desktop's WSL integration is off:"
+        say "      Docker Desktop -> Settings -> Resources -> WSL integration -> enable this distro."
+        failed=1
+    }
+
+    if [ "$failed" -eq 0 ]; then
+        if docker info >/dev/null 2>&1; then
+            ok "docker daemon is reachable"
+        else
+            bad "docker is installed but the daemon is not running."
+            failed=1
+        fi
+    fi
+
+    # !reset and !override in overlay.yaml need 2.24. Without them the vendored
+    # compose files' published ports and bind mounts cannot be removed, only
+    # added to — compose concatenates those lists rather than replacing them.
+    if command -v docker >/dev/null 2>&1; then
+        local cv
+        cv=$(docker compose version --short 2>/dev/null || true)
+        if [ -z "$cv" ]; then
+            # Distinct from "too old", because the usual cause is entirely
+            # different: a distro-packaged docker CLI shadowing Docker Desktop's,
+            # with no compose plugin behind it.
+            bad "this docker CLI has no 'compose' command ($(command -v docker))."
+            say "      If Docker Desktop is installed, its WSL integration may not be"
+            say "      active in this distro: check Settings -> Resources -> WSL"
+            say "      integration, then 'wsl --shutdown' so the mount is remade."
+            say "      Running from Git Bash on Windows instead needs no setup."
+            failed=1
+        elif [ "$(printf '%s\n2.24.0\n' "${cv#v}" | sort -V | head -1)" = "2.24.0" ]; then
+            ok "docker compose $cv"
+        else
+            bad "docker compose $cv is too old; 2.24 or newer is required."
+            failed=1
+        fi
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        ok "curl is available"
+    else
+        bad "curl is required (used to check the stack is up)."
+        failed=1
+    fi
+
+    if [ "$failed" -eq 0 ]; then
+        # The daemon's memory, which on Docker Desktop is the VM's rather than the
+        # host's — the number that actually constrains ten containers.
+        local mem_bytes mem_gb
+        mem_bytes=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
+        mem_gb=$(( mem_bytes / 1024 / 1024 / 1024 ))
+        if [ "$mem_gb" -ge 8 ]; then
+            ok "${mem_gb} GB available to docker"
+        elif [ "$mem_gb" -ge 6 ]; then
+            warn "${mem_gb} GB available to docker. It will run, but Zulip's first boot will be slow."
+        else
+            bad "${mem_gb} GB available to docker; this stack needs about 8 GB."
+            say "      Docker Desktop -> Settings -> Resources -> Memory."
+            failed=1
+        fi
+    else
+        # Said explicitly rather than left silent: this check needs a working
+        # docker, so fixing what failed above can still be followed by a second
+        # failure here, and an operator should know that is coming.
+        warn "the memory check has not run; it needs the checks above to pass first."
+    fi
+
+    local ingress jvb
+    ingress=$(env_get INGRESS_PORT); ingress=${ingress:-8443}
+    jvb=$(env_get JVB_PORT); jvb=${jvb:-10000}
+
+    if (exec 3<>/dev/tcp/127.0.0.1/"$ingress") 2>/dev/null; then
+        exec 3>&- 2>/dev/null || true
+        bad "port $ingress is already in use. Set INGRESS_PORT in .env to something free."
+        failed=1
+    else
+        ok "port $ingress is free"
+    fi
+
+    # UDP cannot be probed by connecting, so this is best-effort and only runs
+    # where ss or netstat exists.
+    if command -v ss >/dev/null 2>&1; then
+        if ss -lun 2>/dev/null | grep -qE "[:.]${jvb}\b"; then
+            warn "UDP port $jvb looks busy; media may not connect. Set JVB_PORT in .env."
+        else
+            ok "UDP port $jvb is free"
+        fi
+    fi
+
+    say ""
+    say "  ${DIM}About 2 GB of images to download on a first run — the Zulip image is 1.1 GB"
+    say "  of that — and roughly 10 GB of disk once unpacked.${RESET}"
+
+    [ "$failed" -eq 0 ] || die "preflight failed; nothing has been changed."
+}
+
+# ---------------------------------------------------------------------------
+# generate
+# ---------------------------------------------------------------------------
+
+cmd_generate() {
+    if [ -f .env ]; then
+        ok ".env already exists, keeping it"
+    else
+        step "Generating configuration"
+        cp .env.example .env
+        chmod 600 .env
+        # The three values that have to be identical across services. They are
+        # written once here and fanned out by overlay.yaml, so there is no way
+        # for them to drift.
+        env_set SHARED_SECRET "$(random_secret)"
+        env_set JITSI_JWT_SECRET "$(random_secret)"
+        env_set JITSI_ROOM_KEY "$(random_secret)"
+        # Jitsi's internal XMPP component passwords.
+        local v
+        for v in JICOFO_AUTH_PASSWORD JVB_AUTH_PASSWORD JIGASI_XMPP_PASSWORD \
+                 JIGASI_TRANSCRIBER_PASSWORD JIBRI_RECORDER_PASSWORD JIBRI_XMPP_PASSWORD; do
+            env_set "$v" "$(random_secret)"
+        done
+        ok "wrote .env"
+    fi
+
+    # Zulip's own secrets are files rather than variables: an environment
+    # variable is visible in `docker inspect` to anything that can reach the
+    # daemon, and these include the database password.
+    mkdir -p secrets
+    chmod 700 secrets
+    local s
+    for s in postgres_password memcached_password rabbitmq_password redis_password \
+             secret_key email_password admin_password; do
+        if [ ! -f "secrets/$s" ]; then
+            # No trailing newline: docker-zulip reads these verbatim.
+            printf '%s' "$(random_secret)" > "secrets/$s"
+            chmod 600 "secrets/$s"
+        fi
+    done
+    ok "secrets present"
+
+    # nginx's allow-list in front of the internal hook, which has to name the
+    # subnet the conferencing service calls from.
+    mkdir -p generated
+    local subnet
+    subnet=$(env_get EDGE_SUBNET); subnet=${subnet:-10.87.0.0/24}
+    sed "s|\${EDGE_SUBNET}|${subnet}|g" zulip/jitsi-hook.conf.template > generated/jitsi-hook.conf
+    ok "rendered generated/jitsi-hook.conf for ${subnet}"
+}
+
+# ---------------------------------------------------------------------------
+# bootstrap
+# ---------------------------------------------------------------------------
+
+# Wait for Zulip to answer through Caddy. The first boot runs every migration
+# against an empty database, which takes minutes rather than seconds.
+wait_for_zulip() {
+    local host port url waited=0 limit=600
+    host=$(env_get ZULIP_HOST); host=${host:-zulip.localhost}
+    port=$(env_get INGRESS_PORT); port=${port:-8443}
+    url="https://${host}:${port}/login/"
+
+    step "Waiting for Zulip (first boot migrates an empty database; this takes a few minutes)"
+    while [ "$waited" -lt "$limit" ]; do
+        # --resolve because *.localhost is resolved by browsers, not by the
+        # system resolver: curl would otherwise fail to look the name up at all.
+        # -k because the certificate is from Caddy's own CA, which this machine
+        # has not been told to trust yet — `zulip-meet trust` is how.
+        if curl -skf --resolve "${host}:${port}:127.0.0.1" -o /dev/null "$url"; then
+            ok "Zulip is answering"
+            return 0
+        fi
+        sleep 5
+        waited=$((waited + 5))
+        [ $((waited % 60)) -eq 0 ] && say "  ${DIM}still waiting (${waited}s)${RESET}"
+    done
+    die "Zulip did not come up within ${limit}s. Try: ./zulip-meet logs zulip"
+}
+
+manage() {
+    compose exec -T -u zulip zulip /home/zulip/deployments/current/manage.py "$@"
+}
+
+cmd_bootstrap() {
+    local admin_email bot_email org
+    admin_email=$(env_get ZULIP_ADMIN_EMAIL); admin_email=${admin_email:-admin@example.com}
+    bot_email="conference-bot@${admin_email#*@}"
+    org=${ZULIP_ORG_NAME:-Zulip Meet}
+
+    if [ -n "$(env_get CONFERENCING_BOT_API_KEY)" ]; then
+        ok "already bootstrapped"
+        return 0
+    fi
+
+    step "Creating the organization, its owner, and the conferencing bot"
+
+    # The password never appears in an argument, because arguments are visible
+    # in `ps` to every other process on the machine.
+    compose exec -T -u zulip zulip sh -c 'umask 077; cat > /tmp/zm-pw' < secrets/admin_password
+
+    # `create_realm` is Zulip's own scripted path for this; it makes the realm
+    # and its first owner in one step. An existing realm makes it fail, which is
+    # why this whole function is skipped once the bot key is recorded.
+    manage create_realm "$org" --string-id="" "$admin_email" "Admin" \
+        --password-file=/tmp/zm-pw >/dev/null
+    ok "organization created, owner ${admin_email}"
+
+    # No management command creates a bot, so this goes through the same action
+    # the web UI uses. The key is printed behind a sentinel because Django's
+    # shell puts other things on stdout.
+    local out key
+    out=$(manage shell <<PY
+from zerver.actions.create_user import do_create_user
+from zerver.models import UserProfile
+from zerver.models.realms import get_realm
+
+realm = get_realm("")
+owner = UserProfile.objects.get(delivery_email__iexact="${admin_email}", realm=realm)
+bot = do_create_user(
+    "${bot_email}",
+    None,
+    realm,
+    "Conferencing",
+    bot_type=UserProfile.DEFAULT_BOT,
+    bot_owner=owner,
+    acting_user=owner,
+)
+print("ZM_BOT_API_KEY=" + bot.api_key)
+PY
+    )
+    key=$(printf '%s' "$out" | sed -n 's/^ZM_BOT_API_KEY=//p' | tail -n 1)
+    compose exec -T -u zulip zulip rm -f /tmp/zm-pw || true
+
+    [ -n "$key" ] || die "the bot was not created; run './zulip-meet logs zulip' and look for a traceback."
+
+    env_set CONFERENCING_BOT_EMAIL "$bot_email"
+    env_set CONFERENCING_BOT_API_KEY "$key"
+    # Only now does the service have an account to poll with. Until this point it
+    # has been running the occupancy half with EVENT_LOOP=0, which is the whole
+    # reason a cold start is possible at all.
+    env_set CONFERENCING_EVENT_LOOP 1
+    ok "bot ${bot_email} created"
+
+    compose up -d conferencing >/dev/null
+    ok "conferencing restarted with its event loop on"
+}
+
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+# Everything here is something that fails *silently* if it is wrong. A stack with
+# all ten containers running and every one of these misconfigured looks, from the
+# outside, exactly like a working one.
+cmd_verify() {
+    step "Verifying the things that fail quietly"
+    local failed=0
+
+    # Without token_affiliation nothing reads context.user.moderator out of the
+    # JWT, and every moderator decision Zulip makes is decorative.
+    if compose exec -T prosody sh -c \
+        'grep -A 12 "Component \"muc.meet.jitsi\"" /run/prosody/config/conf.d/jitsi-meet.cfg.lua' \
+        2>/dev/null | grep -q token_affiliation; then
+        ok "prosody reads the token's moderator claim (token_affiliation)"
+    else
+        bad "prosody is NOT loading token_affiliation: moderator status is decorative."
+        failed=1
+    fi
+
+    # Jicofo has a second, independent path to granting ownership. Under
+    # AUTH_TYPE=jwt it hands it to every holder of a valid token — including an
+    # anonymous visitor, whose token is valid by construction.
+    if [ "$(compose exec -T jicofo sh -c 'grep -c "authentication {" /run/jicofo/config/jicofo.conf' 2>/dev/null | tr -d '\r')" = "0" ]; then
+        ok "jicofo is not granting ownership from its own authentication"
+    else
+        bad "jicofo authentication is enabled: any token holder becomes an owner."
+        failed=1
+    fi
+
+    if compose exec -T jicofo sh -c 'grep enable-auto-owner /run/jicofo/config/jicofo.conf' 2>/dev/null | grep -q false; then
+        ok "jicofo is not handing ownership to whoever joins first"
+    else
+        bad "jicofo enable-auto-owner is not false: the first person in owns the room."
+        failed=1
+    fi
+
+    # Without this the display name in the token is only a suggestion, and a
+    # visitor can rename themselves past their "(guest)" marker.
+    if compose exec -T web sh -c 'grep disableProfile /run/web/config/config.js' 2>/dev/null | grep -q true; then
+        ok "display names are read-only"
+    else
+        bad "disableProfile is not true: anyone can rename themselves in the call."
+        failed=1
+    fi
+
+    # The edge Prosody pushes occupancy across. If this is broken the sidebar is
+    # simply always empty, with no error anywhere.
+    if compose exec -T prosody sh -c 'wget -q -O- -T 3 http://conferencing:8080/healthz >/dev/null 2>&1 || wget -q -O- -T 3 http://conferencing:8080/ >/dev/null 2>&1'; then
+        ok "prosody can reach the conferencing service"
+    else
+        warn "prosody could not reach conferencing:8080 — occupancy will never arrive."
+    fi
+
+    local host port
+    host=$(env_get ZULIP_HOST); host=${host:-zulip.localhost}
+    port=$(env_get INGRESS_PORT); port=${port:-8443}
+    for h in "$host" "$(env_get MEET_HOST)"; do
+        [ -n "$h" ] || continue
+        if curl -skf --resolve "${h}:${port}:127.0.0.1" -o /dev/null "https://${h}:${port}/"; then
+            ok "https://${h}:${port} is serving"
+        else
+            bad "https://${h}:${port} is not answering."
+            failed=1
+        fi
+    done
+
+    [ "$failed" -eq 0 ] || die "verification failed; the stack is running but not sound."
+    say ""
+    ok "all checks passed"
+}
+
+# ---------------------------------------------------------------------------
+# trust
+# ---------------------------------------------------------------------------
+
+cmd_trust() {
+    mkdir -p certs
+    # Caddy generates this on first start and keeps it in the caddy-data volume.
+    compose cp caddy:/data/caddy/pki/authorities/local/root.crt certs/root.crt 2>/dev/null \
+        || die "could not read Caddy's root certificate; is the stack running?"
+
+    local root; root=$(pwd)/certs/root.crt
+    step "Trusting the local certificate authority"
+    say ""
+    say "  Both origins are served with a certificate from a CA generated on this"
+    say "  machine. Until it is trusted, the video panel fails ${BOLD}silently${RESET}: a browser"
+    say "  does not prompt about a certificate inside an iframe, it just refuses it."
+    say ""
+    say "  The root certificate has been written to:"
+    say "    ${BOLD}${root}${RESET}"
+    say ""
+    say "  ${BOLD}Linux${RESET} (Chrome/Chromium, per-profile NSS store):"
+    say "    certutil -d sql:\$HOME/.pki/nssdb -A -t 'C,,' -n zulip-meet -i '$root'"
+    say "  ${BOLD}Linux${RESET} (system-wide):"
+    say "    sudo cp '$root' /usr/local/share/ca-certificates/zulip-meet.crt && sudo update-ca-certificates"
+    say "  ${BOLD}Windows${RESET} (run in an elevated PowerShell; this is where the browser looks,"
+    say "  even when the stack runs inside WSL):"
+    say "    Import-Certificate -FilePath '$root' -CertStoreLocation Cert:\\LocalMachine\\Root"
+    say "  ${BOLD}macOS${RESET}:"
+    say "    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '$root'"
+    say ""
+    say "  ${DIM}Restart the browser afterwards. Skipping this is survivable — open each"
+    say "  origin once in a tab and accept the warning — but the certificate has to be"
+    say "  accepted for the ${BOLD}meet${RESET}${DIM} origin specifically, not just for Zulip.${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# up / down / destroy
+# ---------------------------------------------------------------------------
+
+cmd_up() {
+    cmd_preflight
+    cmd_generate
+
+    # `up --build` is sticky: it records the choice in .env so every later run
+    # keeps building rather than trying to pull images that may not be published
+    # yet. Undo it by setting ZULIP_MEET_BUILD=0.
+    [ "${1:-}" = "--build" ] && env_set ZULIP_MEET_BUILD 1
+
+    if [ "$(env_get ZULIP_MEET_BUILD)" = "1" ]; then
+        # build.yaml only adds `build:` blocks; the image names come from
+        # overlay.yaml either way, so what is built is tagged exactly as what
+        # would have been pulled and everything downstream is identical.
+        local files
+        files=$(env_get COMPOSE_FILE)
+        export COMPOSE_FILE="${files}:build.yaml"
+        step "Building images (Zulip is 20-45 minutes the first time; the rest are quick)"
+        compose build
+    else
+        step "Pulling images (about 2 GB on a first run)"
+        compose pull --quiet
+    fi
+
+    step "Starting"
+    compose up -d
+    ok "containers started"
+
+    wait_for_zulip
+    cmd_bootstrap
+    cmd_verify
+
+    local host port admin
+    host=$(env_get ZULIP_HOST); port=$(env_get INGRESS_PORT)
+    admin=$(env_get ZULIP_ADMIN_EMAIL)
+
+    step "Ready"
+    say ""
+    say "  Zulip     ${BOLD}https://${host}:${port}${RESET}"
+    say "  Sign in   ${BOLD}${admin}${RESET}"
+    say "  Password  ${BOLD}$(cat secrets/admin_password)${RESET}"
+    say ""
+    say "  Run ${BOLD}./zulip-meet trust${RESET} before starting a call, or the video panel will"
+    say "  silently refuse to load."
+    say ""
+}
+
+cmd_down()  { compose down; ok "stopped; data kept"; }
+
+cmd_destroy() {
+    say "${BOLD}This deletes every volume, secret and generated file for this stack:${RESET}"
+    say "  the Zulip database, all uploads, the certificate authority, and .env."
+    printf 'Type "destroy" to confirm: '
+    local answer; read -r answer
+    [ "$answer" = "destroy" ] || { say "Cancelled; nothing was changed."; return 0; }
+    compose down -v
+    rm -rf secrets generated certs .env
+    ok "destroyed"
+}
+
+cmd_logs() { compose logs -f --tail=100 "$@"; }
+
+usage() {
+    cat <<'EOF'
+Zulip Meet
+
+  ./zulip-meet up          check, generate, pull, start, bootstrap and verify
+  ./zulip-meet up --build  the same, building the four images locally instead of
+                           pulling them (remembered for later runs)
+  ./zulip-meet trust       how to trust the local certificate authority
+  ./zulip-meet verify      re-run the checks against a running stack
+  ./zulip-meet preflight   check this machine without changing anything
+  ./zulip-meet bootstrap   create the organization and bot (part of `up`)
+  ./zulip-meet logs [svc]  follow logs
+  ./zulip-meet down        stop, keeping all data
+  ./zulip-meet destroy     stop and delete every volume, secret and generated file
+
+Configuration lives in .env, generated on the first `up`. Editing it and running
+`up` again reconciles the stack; nothing already generated is overwritten.
+EOF
+}
+
+case "${1:-up}" in
+    up)        shift || true; cmd_up "$@" ;;
+    preflight) shift || true; cmd_preflight ;;
+    generate)  shift || true; cmd_generate ;;
+    bootstrap) shift || true; cmd_bootstrap ;;
+    verify)    shift || true; cmd_verify ;;
+    trust)     shift || true; cmd_trust ;;
+    logs)      shift || true; cmd_logs "$@" ;;
+    down)      shift || true; cmd_down ;;
+    destroy)   shift || true; cmd_destroy ;;
+    -h|--help|help) usage ;;
+    *)         usage; exit 1 ;;
+esac

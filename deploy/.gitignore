@@ -1,0 +1,5 @@
+# Written by `zulip-meet up`, never committed.
+.env
+secrets/
+generated/
+certs/

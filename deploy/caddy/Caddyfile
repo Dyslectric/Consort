@@ -1,0 +1,41 @@
+# TLS for both origins, on one port, separated by hostname.
+#
+# Jitsi's external_api.js builds the call's iframe URL as `https://<host>/...`
+# with the scheme hardcoded and no option to change it, so the meet origin can
+# never be plain HTTP — not even on a laptop. That single fact is why this file
+# exists rather than the services publishing their own ports.
+#
+# One port with two names, rather than one name with two ports, because cookies
+# ignore ports: `localhost:8443` and `localhost:8444` would be one cookie jar
+# shared between Zulip and the meet app.
+#
+# `*.localhost` resolves to loopback in Chrome and Firefox without touching a
+# hosts file (RFC 6761). Safari on macOS may not; a hosts entry is the fallback.
+
+{
+	# No admin API: nothing here reconfigures Caddy at runtime, and it would
+	# otherwise listen on 2019 inside the container.
+	admin off
+
+	# Certificates from Caddy's own CA, generated on first start and kept in the
+	# caddy-data volume. Browsers will not trust that CA until it is imported —
+	# `zulip-meet trust` prints how — and until then the meet iframe fails
+	# *silently*, because a browser does not prompt about a bad certificate
+	# inside a frame. Zulip detects that case and says so rather than leaving the
+	# call button doing nothing (see web/src/embedded_call.ts).
+	#
+	# The production profile replaces this one directive with an ACME issuer;
+	# everything below is unchanged.
+	local_certs
+}
+
+{$ZULIP_HOST}:{$INGRESS_PORT} {
+	reverse_proxy zulip:80
+}
+
+{$MEET_HOST}:{$INGRESS_PORT} {
+	# The web container serves plain HTTP on 8000 (DISABLE_HTTPS=1 in .env stops
+	# it redirecting to a port that is not published). WebSocket upgrades for the
+	# XMPP transport pass through reverse_proxy untouched.
+	reverse_proxy web:8000
+}

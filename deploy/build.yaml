@@ -1,0 +1,47 @@
+---
+# Build the four images locally instead of pulling them.
+#
+# Add it to COMPOSE_FILE in .env — `zulip-meet up --build` does that for you —
+# and the stack runs with no registry involved at all. Useful for three things:
+# hacking on any of the four components, running before the images have ever been
+# published, and reproducing a build that CI got wrong.
+#
+# Three of the four are quick: the two Jitsi images are thin layers over upstream,
+# and the conferencing service is a small Python app. Zulip is the slow one — it
+# builds the server and its frontend from source, which is 20-45 minutes and
+# several GB of scratch space. It is also the one that changes least often.
+
+services:
+  # Upstream's own build context, fetched by BuildKit straight from git at the
+  # tag vendor/docker-zulip/compose.yaml is pinned to, so there is no second copy
+  # of docker-zulip in this repository to keep in step. The two build args are the
+  # entire difference from a stock Zulip image: which repository to build, and
+  # which ref of it.
+  zulip:
+    build:
+      context: "https://github.com/zulip/docker-zulip.git#12.1-0"
+      args:
+        ZULIP_GIT_URL: ${ZULIP_GIT_URL:-https://github.com/Dyslectric/zulip-meet-integration}
+        ZULIP_GIT_REF: ${ZULIP_GIT_REF:-lounges}
+
+  conferencing:
+    build:
+      context: ../zulip-meet-conferencing
+
+  # Both Jitsi images take the repository root as their context, because each
+  # needs a file that lives outside its own directory — the speaking relay in
+  # embedded-call/, the Lua in jitsi-token-harness/ and zulip-meet-conferencing/.
+  # The root .dockerignore keeps that from shipping the demo video.
+  prosody:
+    build:
+      context: ..
+      dockerfile: deploy/images/prosody/Dockerfile
+      args:
+        JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/images/web/Dockerfile
+      args:
+        JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}

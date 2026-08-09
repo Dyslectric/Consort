@@ -1,0 +1,252 @@
+---
+# Everything Zulip Meet changes about the two vendored upstream compose files,
+# plus the three services they know nothing about.
+#
+# The files under vendor/ are byte-for-byte upstream at a pinned tag and are
+# never edited. That is the whole point of this file: the previous deployment
+# edited docker-jitsi-meet's own 529-line compose in place, which made every
+# upstream bump a manual merge against changes nobody had written down. Here the
+# diff against upstream *is* this file.
+#
+# Loaded together with the vendored files through COMPOSE_FILE in .env, so a bare
+# `docker compose up -d` in this directory gets all three in the right order.
+
+secrets:
+  # docker-zulip's compose.yaml references these but deliberately does not define
+  # them — where the values come from is the operator's decision. They come from
+  # files written by the installer with 0600 permissions, because the alternative
+  # (environment:) puts them in `docker inspect` output for anything that can
+  # reach the daemon.
+  zulip__postgres_password:
+    file: ./secrets/postgres_password
+  zulip__memcached_password:
+    file: ./secrets/memcached_password
+  zulip__rabbitmq_password:
+    file: ./secrets/rabbitmq_password
+  zulip__redis_password:
+    file: ./secrets/redis_password
+  zulip__secret_key:
+    file: ./secrets/secret_key
+  zulip__email_password:
+    file: ./secrets/email_password
+
+services:
+  # ---------------------------------------------------------------------------
+  # Ingress
+  # ---------------------------------------------------------------------------
+
+  # The one thing on the host. Both origins are served here on a single port,
+  # separated by hostname, for two reasons: cookies ignore ports, so two ports on
+  # `localhost` would share a cookie jar between Zulip and the meet app; and
+  # Jitsi's external_api.js hardcodes `https://` when it builds the iframe URL,
+  # so the meet origin has to be HTTPS whatever else happens.
+  #
+  # This is also what the production profile will use, with the internal CA
+  # swapped for ACME — the same topology the live deployment already runs behind
+  # Traefik, so there is one ingress story rather than two.
+  caddy:
+    image: caddy:2-alpine
+    restart: ${RESTART_POLICY:-unless-stopped}
+    ports:
+      - "${INGRESS_PORT:-8443}:${INGRESS_PORT:-8443}"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The internal CA's root key lives here. Losing it means every browser that
+      # trusted the old root has to be told about a new one, so it is a named
+      # volume rather than anything that gets cleaned up with the containers.
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      ZULIP_HOST: ${ZULIP_HOST:-zulip.localhost}
+      MEET_HOST: ${MEET_HOST:-meet.localhost}
+      INGRESS_PORT: ${INGRESS_PORT:-8443}
+    networks:
+      - edge
+      - meet.jitsi
+    depends_on:
+      - zulip
+      - web
+
+  # ---------------------------------------------------------------------------
+  # Conferencing service
+  # ---------------------------------------------------------------------------
+
+  # Owns call state and occupancy. Prosody pushes to it over meet.jitsi; it calls
+  # back into Zulip's internal hook over edge.
+  conferencing:
+    image: ghcr.io/dyslectric/zulip-meet-conferencing:${ZULIP_MEET_VERSION:-latest}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    environment:
+      ZULIP_SITE: https://${ZULIP_HOST:-zulip.localhost}:${INGRESS_PORT:-8443}
+      # Written back into .env by `zulip-meet bootstrap` once the bot exists —
+      # there is no way to have them before Zulip has booted and made one.
+      ZULIP_EMAIL: ${CONFERENCING_BOT_EMAIL:-}
+      ZULIP_API_KEY: ${CONFERENCING_BOT_API_KEY:-}
+      # Straight to the container over the internal network rather than back out
+      # through Caddy. TLS verification is off because the hop never leaves the
+      # docker host and there is no certificate for `zulip`; the bearer secret is
+      # the authentication. ZULIP_HOOK_HOST is what Django matches against
+      # ALLOWED_HOSTS, which is derived from EXTERNAL_HOST, so it must be the
+      # public name even though the connection is internal.
+      ZULIP_HOOK_URL: http://zulip/api/internal/jitsi
+      ZULIP_HOOK_HOST: ${ZULIP_HOST:-zulip.localhost}
+      ZULIP_HOOK_VERIFY_TLS: "false"
+      # One value, three consumers (here, prosody, and Zulip's secrets below).
+      # Defined once in compose rather than three times in .env so the identity
+      # is structural: a mismatch used to be a silent, undebuggable auth failure.
+      EVENT_SYNC_SECRET: ${SHARED_SECRET:?SHARED_SECRET is required}
+      CENSUS_URL: http://prosody:5280/room-census
+      # Off until the bot key exists; `zulip-meet bootstrap` turns it on.
+      EVENT_LOOP: ${CONFERENCING_EVENT_LOOP:-0}
+    networks:
+      - edge
+      - meet.jitsi
+
+  # ---------------------------------------------------------------------------
+  # Zulip
+  # ---------------------------------------------------------------------------
+
+  zulip:
+    image: ghcr.io/dyslectric/zulip-meet-server:${ZULIP_MEET_VERSION:-latest}
+    # Upstream publishes 25, 80 and 443 straight onto the host. Caddy is the only
+    # thing that should be listening, so drop the list rather than adding to it —
+    # compose concatenates `ports` across files, it does not replace.
+    ports: !reset null
+    # Upstream can build the image from its own directory; we always pull.
+    build: !reset null
+    volumes:
+      # nginx's allow-list for the internal hook. Generated rather than shipped,
+      # because it names the subnet the conferencing service calls from and that
+      # is a deployment fact, not a constant. See zulip/jitsi-hook.conf.template.
+      - ./generated/jitsi-hook.conf:/etc/nginx/zulip-include/app.d/jitsi-hook.conf:ro
+    environment:
+      SETTING_EXTERNAL_HOST: ${ZULIP_HOST:-zulip.localhost}:${INGRESS_PORT:-8443}
+      SETTING_ZULIP_ADMINISTRATOR: ${ZULIP_ADMIN_EMAIL:-admin@example.com}
+      # TLS terminates at Caddy, so Zulip has to be told which addresses are
+      # allowed to speak for a client. This is the same CIDR the hook's nginx
+      # block allows, and both Caddy and the conferencing service sit inside it.
+      LOADBALANCER_IPS: ${EDGE_SUBNET:-10.87.0.0/24}
+      # The Jitsi settings, all of which now have defaults in the fork's
+      # default_settings.py — so this is the entire Zulip-side configuration and
+      # there is no settings.py to template or mount.
+      SETTING_JITSI_SERVER_URL: https://${MEET_HOST:-meet.localhost}:${INGRESS_PORT:-8443}
+      # Same variable Jitsi's own JWT_APP_ID comes from: the token's `aud`/app id
+      # has to agree on both sides or Prosody rejects every token.
+      SETTING_JITSI_JWT_APP_ID: ${JWT_APP_ID:-zulip}
+      SETTING_JITSI_DEFAULT_TENANT: ${JITSI_DEFAULT_TENANT:-root}
+      SETTING_JITSI_CONFERENCING_URL: http://conferencing:8080
+      SECRETS_jitsi_jwt_app_secret: ${JITSI_JWT_SECRET:?JITSI_JWT_SECRET is required}
+      SECRETS_jitsi_room_key: ${JITSI_ROOM_KEY:?JITSI_ROOM_KEY is required}
+      SECRETS_jitsi_conferencing_secret: ${SHARED_SECRET:?SHARED_SECRET is required}
+    networks:
+      - default
+      - edge
+
+  # The four stock backing services only need to be reachable by Zulip, which is
+  # the default network; they are named here solely to keep them off `edge`.
+  database:
+    networks: [default]
+  memcached:
+    networks: [default]
+  rabbitmq:
+    networks: [default]
+  redis:
+    networks: [default]
+
+  # ---------------------------------------------------------------------------
+  # Jitsi
+  # ---------------------------------------------------------------------------
+
+  web:
+    # Custom image: the stock one plus jitsi-speaking-relay.js, which is the only
+    # place per-participant audio levels exist (the External API exposes just the
+    # single dominant speaker).
+    image: ghcr.io/dyslectric/zulip-meet-web:${ZULIP_MEET_VERSION:-latest}
+    # Upstream publishes ${HTTP_PORT}:8000 and ${HTTPS_PORT}:8443 on the host.
+    # Caddy reaches it as `web:8000` over the docker network instead.
+    ports: !reset null
+    # Named volumes instead of upstream's ${CONFIG}/... bind mounts, mirroring
+    # them one for one (the container's root filesystem is read-only, so a path
+    # it writes to has to stay a mount). Docker creates a missing bind-mount
+    # source as root, and every Jitsi container then refuses to start with
+    # "directory is not writable by the container user (uid 1000)" — a landmine
+    # that costs a new operator half an hour and cannot happen with these.
+    volumes: !override
+      - jitsi-web-config:/config
+      - jitsi-web-storage:/storage
+      - jitsi-web-transcripts:/usr/share/jitsi-meet/transcripts:ro
+      - jitsi-web-crontabs:/var/spool/cron/crontabs
+      - jitsi-web-load-test:/usr/share/jitsi-meet/load-test
+    networks:
+      - meet.jitsi
+
+  prosody:
+    # Custom image: the event_sync component config, plus the contrib modules
+    # that are not in the stock image.
+    image: ghcr.io/dyslectric/zulip-meet-prosody:${ZULIP_MEET_VERSION:-latest}
+    environment:
+      # docker-jitsi-meet forwards only a curated list of variables into this
+      # container, so anything not on that list has to be named explicitly here —
+      # putting it in .env alone does nothing.
+      EVENT_SYNC_SECRET: ${SHARED_SECRET:?SHARED_SECRET is required}
+      JWT_APP_SECRET: ${JITSI_JWT_SECRET:?JITSI_JWT_SECRET is required}
+      # token_affiliation is what reads context.user.moderator out of the JWT. It
+      # ships in the image but is NOT enabled by default, and without it every
+      # moderator decision Zulip makes is decorative. muc_census backs occupancy
+      # reconciliation; token_no_wildcard refuses a token claiming every room.
+      XMPP_MUC_MODULES: token_no_wildcard,muc_census,token_affiliation_legacy,token_affiliation
+    # The plugins and event_sync.cfg.lua are baked into the image, so the
+    # prosody-plugins-custom mount upstream expects is not needed here.
+    volumes: !override
+      - jitsi-prosody-config:/config
+      - jitsi-prosody-storage:/var/lib/prosody
+    networks:
+      meet.jitsi:
+        aliases:
+          - ${XMPP_SERVER:-xmpp.meet.jitsi}
+
+  jicofo:
+    # Upstream binds its REST port to 127.0.0.1:8888, which collides with enough
+    # other software to be worth not having; nothing here uses it.
+    ports: !reset null
+    volumes: !override
+      - jitsi-jicofo-config:/config
+    networks:
+      - meet.jitsi
+
+  jvb:
+    # The media port genuinely has to be published — it is UDP straight from the
+    # browser. Upstream also publishes colibri on 127.0.0.1:8080, which is a
+    # popular port on a development machine, so the list is replaced rather than
+    # extended.
+    ports: !override
+      - "${JVB_PORT:-10000}:${JVB_PORT:-10000}/udp"
+    volumes: !override
+      - jitsi-jvb-config:/config
+    networks:
+      - meet.jitsi
+
+volumes:
+  caddy-data:
+  caddy-config:
+  jitsi-web-config:
+  jitsi-web-storage:
+  jitsi-web-transcripts:
+  jitsi-web-crontabs:
+  jitsi-web-load-test:
+  jitsi-prosody-config:
+  jitsi-prosody-storage:
+  jitsi-jicofo-config:
+  jitsi-jvb-config:
+
+networks:
+  # Zulip and its four backing services.
+  default:
+  # The trust boundary the internal hook is protected by: a pinned subnet so that
+  # nginx's allow-list and Zulip's LOADBALANCER_IPS can name it without pinning
+  # individual container addresses, which is what the previous deployment had to
+  # do.
+  edge:
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:-10.87.0.0/24}

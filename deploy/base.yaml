@@ -1,0 +1,14 @@
+---
+# This file exists to fix where relative paths point, and does nothing else.
+#
+# Compose resolves every relative path in every merged file against the project
+# directory, which defaults to the directory of the *first* file in COMPOSE_FILE.
+# Without this, that would be vendor/docker-jitsi-meet/ — so `./caddy/Caddyfile`
+# and `./secrets/...` in overlay.yaml, and `..` in build.yaml, would all resolve
+# somewhere inside the vendored upstream. Compose does not check that bind-mount
+# sources exist when it merges, so the mistake survives `config` and only shows up
+# as an empty mount at runtime.
+#
+# Listing this first makes deploy/ the project directory, which is what every
+# path in overlay.yaml and build.yaml is written against.
+name: zulip-meet

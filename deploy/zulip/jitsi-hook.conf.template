@@ -1,0 +1,36 @@
+# nginx: expose the Jitsi core message hook to the conferencing service only.
+#
+# Rendered to generated/jitsi-hook.conf with ${EDGE_SUBNET} substituted, and
+# mounted at /etc/nginx/zulip-include/app.d/jitsi-hook.conf — a directory Zulip's
+# nginx `app` config already includes with `include .../app.d/*.conf;`.
+#
+# Why this works: Zulip ships a `location /api/internal/` that is localhost-only
+# (allow 127.0.0.1; allow ::1; deny all;), so a cross-container request from the
+# conferencing service gets 403. This block is a MORE-SPECIFIC prefix
+# (/api/internal/jitsi/), and nginx routes to the most-specific matching prefix
+# regardless of include order — so the service's hook calls land here while every
+# other /api/internal/ path stays localhost-only.
+#
+# The body mirrors Zulip's stock `location /api/` block. `uwsgi_pass django;`
+# lives inside `uwsgi_params` on this image, so `include uwsgi_params;` both sets
+# the params and routes to Django. Do NOT add a second `uwsgi_pass` — nginx
+# errors on a duplicate.
+#
+# Two layers of defence, deliberately: the app enforces the bearer secret
+# (constant-time, 404 on mismatch); this enforces the network boundary, so the
+# most privileged endpoint in the system is never reachable from the ingress —
+# only from the internal subnet the conferencing service sits on.
+
+location /api/internal/jitsi/ {
+    allow 127.0.0.1;
+    allow ::1;
+    # The `edge` network from overlay.yaml, whose subnet is pinned in .env for
+    # exactly this reason. It must also appear in Zulip's LOADBALANCER_IPS, or
+    # the proxy-misconfiguration middleware 500s the request before it reaches
+    # the view — the same variable feeds both, so they cannot drift.
+    allow ${EDGE_SUBNET};
+    deny all;
+
+    include /etc/nginx/zulip-include/api_headers;
+    include uwsgi_params;
+}

@@ -1,0 +1,16 @@
+# The repository root is the build context for the two Jitsi images (each needs a
+# file from outside its own directory), so this keeps that context small and
+# keeps anything secret-bearing out of a build.
+.git
+.claude
+**/__pycache__
+**/*.pyc
+docs/demo.mp4
+docs/demo.gif
+conferencing.zip
+deploy/vendor
+deploy/secrets
+deploy/generated
+deploy/certs
+deploy/.env
+**/.env
