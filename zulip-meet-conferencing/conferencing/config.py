@@ -3,12 +3,19 @@
 The one opinion this file has is that missing configuration is a startup
 failure, never a runtime surprise. A conferencing service that boots without its
 ``EVENT_SYNC_SECRET`` is an open write endpoint to the occupancy state of every
-call (see ``sinks.py``); one that boots without its Zulip credentials is a
-process that polls nothing and edits nothing while looking perfectly healthy.
+call (see ``sinks.py``); one that boots with the event loop on but no Zulip
+credentials is a process that polls nothing while looking perfectly healthy.
 Both are the "looks fine, is wrong" failure this project keeps producing, so the
 service refuses to start and says *everything* that is missing at once, rather
 than failing on the first blank and making the operator rediscover the next one
 on the next run.
+
+What is required therefore depends on what is turned on. The bot credentials are
+read by exactly one thing, the event-queue loop, so they are required exactly
+when it runs. That is not a relaxation for its own sake: on a fresh deployment
+the bot is a Zulip account that cannot exist until Zulip has booted, so a service
+that demanded one unconditionally could never be brought up alongside the server
+it belongs to. ``EVENT_LOOP=0`` is the honest way to say "not yet".
 
 Nothing here is secret-bearing at rest: values come from the environment so the
 same image runs in every deployment and the secrets live wherever the operator
@@ -28,11 +35,16 @@ class ConfigError(RuntimeError):
 
 @dataclass(frozen=True)
 class Config:
-    # -- required: without any of these the service cannot do its job --------
-    zulip_site: str
-    zulip_email: str
-    zulip_api_key: str
+    # -- required always: nothing the service does is safe without it --------
     event_sync_secret: str
+
+    # -- required only while the event loop runs -----------------------------
+    #: The bot's account, used by nothing but ``EventLoop``. Blank is legal when
+    #: ``event_loop_enabled`` is false, and is what a deployment looks like
+    #: between "Zulip is up" and "the bot has been created".
+    zulip_site: str = ""
+    zulip_email: str = ""
+    zulip_api_key: str = ""
 
     # -- optional, each with a documented consequence when absent -----------
     #: Prosody's mod_muc_census URL. Absent → reconciliation is disabled and the
@@ -92,12 +104,17 @@ class Config:
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
         env = os.environ if env is None else env
 
-        required = {
-            "zulip_site": "ZULIP_SITE",
-            "zulip_email": "ZULIP_EMAIL",
-            "zulip_api_key": "ZULIP_API_KEY",
-            "event_sync_secret": "EVENT_SYNC_SECRET",
-        }
+        event_loop_enabled = (env.get("EVENT_LOOP", "true").strip().lower()) not in (
+            "0", "false", "no", "off",
+        )
+
+        required = {"event_sync_secret": "EVENT_SYNC_SECRET"}
+        if event_loop_enabled:
+            required |= {
+                "zulip_site": "ZULIP_SITE",
+                "zulip_email": "ZULIP_EMAIL",
+                "zulip_api_key": "ZULIP_API_KEY",
+            }
         values: dict[str, str] = {}
         missing: list[str] = []
         for field_name, env_name in required.items():
@@ -107,9 +124,18 @@ class Config:
             else:
                 missing.append(env_name)
         if missing:
-            raise ConfigError(
-                "missing required configuration: " + ", ".join(sorted(missing))
-            )
+            message = "missing required configuration: " + ", ".join(sorted(missing))
+            if event_loop_enabled and missing != ["EVENT_SYNC_SECRET"]:
+                # Said here because the alternative is an operator concluding the
+                # service cannot start without a bot account, when in fact it
+                # runs the occupancy half perfectly well without one — which is
+                # the only way to bring it up beside a Zulip that does not have a
+                # bot yet.
+                message += (
+                    "; these are only needed for the Zulip event loop, "
+                    "which EVENT_LOOP=0 turns off"
+                )
+            raise ConfigError(message)
 
         census_url = (env.get("CENSUS_URL") or "").strip() or None
         zulip_hook_url = (env.get("ZULIP_HOOK_URL") or "").strip() or None
@@ -120,9 +146,6 @@ class Config:
             "0", "false", "no", "off",
         )
         zulip_hook_host = (env.get("ZULIP_HOOK_HOST") or "").strip() or None
-        event_loop_enabled = (env.get("EVENT_LOOP", "true").strip().lower()) not in (
-            "0", "false", "no", "off",
-        )
 
         try:
             bind_port = int(env.get("BIND_PORT", "8080"))
@@ -133,10 +156,10 @@ class Config:
             raise ConfigError(f"a numeric setting was not a number: {exc}") from exc
 
         return cls(
-            zulip_site=values["zulip_site"].rstrip("/"),
-            zulip_email=values["zulip_email"],
-            zulip_api_key=values["zulip_api_key"],
             event_sync_secret=values["event_sync_secret"],
+            zulip_site=values.get("zulip_site", "").rstrip("/"),
+            zulip_email=values.get("zulip_email", ""),
+            zulip_api_key=values.get("zulip_api_key", ""),
             census_url=census_url,
             zulip_hook_url=zulip_hook_url,
             hook_secret=hook_secret,

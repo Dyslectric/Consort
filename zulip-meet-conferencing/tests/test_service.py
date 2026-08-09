@@ -111,6 +111,33 @@ class TestConfig:
         with pytest.raises(ConfigError):
             Config.from_env({**ENV, "EVENT_SYNC_SECRET": "   "})
 
+    def test_the_bot_account_is_not_required_when_the_event_loop_is_off(self):
+        # A fresh deployment has no bot: it is a Zulip account, and Zulip has to
+        # be up before one can exist. Demanding it unconditionally would mean the
+        # service could never start beside the server it belongs to. The occupancy
+        # half — the sinks and the sidebar push — uses none of it.
+        config = Config.from_env(
+            {"EVENT_SYNC_SECRET": "shared-with-prosody", "EVENT_LOOP": "0"}
+        )
+        assert config.event_loop_enabled is False
+        assert config.zulip_email == ""
+        assert config.zulip_api_key == ""
+
+    def test_the_secret_is_still_required_when_the_event_loop_is_off(self):
+        # Turning the loop off relaxes who we are to Zulip, never who may write
+        # to us: without the secret the sinks are an open write endpoint to the
+        # occupancy state of every call.
+        with pytest.raises(ConfigError) as exc:
+            Config.from_env({"EVENT_LOOP": "0"})
+        assert "EVENT_SYNC_SECRET" in str(exc.value)
+
+    def test_missing_bot_credentials_say_how_to_run_without_them(self):
+        # The refusal has to name the way out, or an operator reasonably concludes
+        # the service cannot run at all before a bot exists.
+        with pytest.raises(ConfigError) as exc:
+            Config.from_env({"EVENT_SYNC_SECRET": "shared-with-prosody"})
+        assert "EVENT_LOOP=0" in str(exc.value)
+
     def test_a_census_url_enables_reconciliation(self):
         config = Config.from_env({**ENV, "CENSUS_URL": "http://prosody:5280/census"})
         assert config.reconciliation_enabled is True

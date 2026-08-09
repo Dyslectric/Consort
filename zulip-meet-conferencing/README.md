@@ -72,8 +72,9 @@ Read from the environment; the process refuses to start if a required value is m
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | yes | Bot credentials for the event-queue loop (drives reconcile-on-reconnect; the seam for the future private-call flow). |
 | `EVENT_SYNC_SECRET` | yes | Bearer secret shared with Prosody's `event_sync`; guards the occupancy sinks. |
+| `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | with the loop† | Bot credentials for the event-queue loop (drives reconcile-on-reconnect; the seam for the future private-call flow). |
+| `EVENT_LOOP` | no | Run the Zulip event-queue loop (default on). `EVENT_LOOP=0` turns it off, and with it the requirement for a bot account. |
 | `ZULIP_HOOK_URL` | no* | Base URL of Zulip's internal message hook. Absent → posting disabled (occupancy still tracked, widget still answers, no messages written). |
 | `ZULIP_HOOK_HOST` | no | `Host` header for the hook hop when reaching Zulip by an internal name Django's `ALLOWED_HOSTS` would otherwise reject. |
 | `ZULIP_HOOK_SECRET` | no | Bearer for the hook; defaults to `EVENT_SYNC_SECRET`. |
@@ -83,6 +84,12 @@ Read from the environment; the process refuses to start if a required value is m
 | `BIND_HOST` / `BIND_PORT` | no | Sink bind address (default `0.0.0.0:8080`). |
 
 \* Not required to *start*, but nothing gets posted to Zulip without it.
+
+† Required only when the event loop is on, because it is the only thing that reads them. On a fresh
+deployment the bot cannot exist yet — it is a Zulip account, and Zulip has to be up first — so a
+service that demanded one unconditionally could never be brought up alongside the server it belongs
+to. Start with `EVENT_LOOP=0`, create the bot, then set the credentials and turn the loop on. The
+occupancy sinks and the sidebar push work throughout.
 
 ## What is in here
 
