@@ -22,15 +22,24 @@ FROM jitsi/prosody:${JITSI_IMAGE_VERSION}
 
 USER root
 
-# Two modules upstream does not ship, pinned twice over: by the commit they came
-# from, and by the hash of what that commit actually served. The second is the
-# stronger claim — it pins what is running rather than what a ref pointed at when
-# someone looked — and a mismatch fails the build rather than shipping quietly.
+# Three modules upstream does not ship, pinned twice over: by the commit they
+# came from, and by the hash of what that commit actually served. The second is
+# the stronger claim — it pins what is running rather than what a ref pointed at
+# when someone looked — and a mismatch fails the build rather than shipping
+# quietly.
 #
-#   mod_event_sync_component  streams occupancy to the conferencing service
+#   mod_event_sync_component      streams occupancy to the conferencing service
 #   mod_token_affiliation_legacy  sets affiliation from the token's moderator
 #                                 claim on images whose bundled module predates
 #                                 the pre-join write (see the note below)
+#   mod_token_no_wildcard         refuses a token claiming every room, which is a
+#                                 skeleton key for the deployment and a silent
+#                                 failure without it
+#
+# Fetched rather than copied out of jitsi-token-harness/prosody-plugins-custom/,
+# where a working copy of the third one usually sits: that directory is
+# .gitignore'd on purpose, because its contents are fetched third-party code, so
+# it is empty in a fresh clone and in every CI checkout.
 #
 # mod_muc_census and mod_token_affiliation are already in the image; enabling
 # them in XMPP_MUC_MODULES is enough, and vendoring them would only create a
@@ -43,17 +52,18 @@ RUN set -eux; \
         -o /prosody-plugins-custom/mod_event_sync_component.lua; \
     curl -fsSL "$base/token_affiliation_legacy/mod_token_affiliation_legacy.lua" \
         -o /prosody-plugins-custom/mod_token_affiliation_legacy.lua; \
-    echo "c4ea639f9b61dfa8548e84f535953967c4139404d331a7abfe86e83d558c4024  /prosody-plugins-custom/mod_event_sync_component.lua" > /tmp/sums; \
-    echo "02b4fca21a01397e05b86c4e4043b6ac8638f31aed0439b06e09f958d1e076a9  /prosody-plugins-custom/mod_token_affiliation_legacy.lua" >> /tmp/sums; \
+    curl -fsSL "$base/token_no_wildcard/mod_token_no_wildcard.lua" \
+        -o /prosody-plugins-custom/mod_token_no_wildcard.lua; \
+    { \
+      echo "c4ea639f9b61dfa8548e84f535953967c4139404d331a7abfe86e83d558c4024  /prosody-plugins-custom/mod_event_sync_component.lua"; \
+      echo "02b4fca21a01397e05b86c4e4043b6ac8638f31aed0439b06e09f958d1e076a9  /prosody-plugins-custom/mod_token_affiliation_legacy.lua"; \
+      echo "6d4a1bffb5fdeddfaf769b22cd9e88b103bfe8a5d5e910c8dde307a937db0407  /prosody-plugins-custom/mod_token_no_wildcard.lua"; \
+    } > /tmp/sums; \
     sha256sum -c /tmp/sums; \
     rm /tmp/sums
 
-# Ours: refuses a token claiming every room (a skeleton key for the deployment,
-# and a silent failure without it), and the event_sync component's own config,
-# which reads its bearer secret from the environment rather than being rendered
-# with a secret baked in.
-COPY jitsi-token-harness/prosody-plugins-custom/mod_token_no_wildcard.lua \
-     /prosody-plugins-custom/mod_token_no_wildcard.lua
+# Ours: the event_sync component's own config, which reads its bearer secret from
+# the environment rather than being rendered with a secret baked in.
 COPY zulip-meet-conferencing/deploy/prosody/event_sync.cfg.lua \
      /prosody-plugins-custom/event_sync.cfg.lua
 
