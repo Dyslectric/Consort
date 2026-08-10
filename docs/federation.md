@@ -18,9 +18,9 @@ what is still open. Work lives on branch `federation`.
 
 | | federated? | why |
 |---|---|---|
-| identity | **yes** | one key authenticates you to every server on your list |
+| identity | **yes** | one root key authenticates you to every network, and through a network to its servers — see "Networks" |
 | channels, DMs, messages | no | realm-scoped integer IDs, no federation protocol, multi-year project |
-| calls | no | a call stays inside the server that minted it |
+| calls | no | a call stays inside the server that minted it; the server hosts its own Jitsi and mints its own tokens |
 | presence, occupancy | no | follows the call |
 
 The decision that makes this tractable: **a conversation never spans servers.**
@@ -31,6 +31,16 @@ downstream of content federation, and content federation is out.
 
 What you get is the thing that was actually asked for: a server list, one
 identity, and no password per server.
+
+**Choosing where to hold a DM** is the one place this looks like more than it is.
+Two people who both belong to several of the same servers may prefer one of them
+for a particular conversation — but the conversation still lives entirely on that
+one server, and everything downstream is unchanged. It is a client feature, not a
+protocol one, and it must stay that way: a server endpoint answering "is this
+person also here" would be an enumeration oracle over exactly the membership graph
+this design hides. The client therefore offers only servers where it already has
+local evidence of the person — a shared channel, existing history — which reduces
+the feature to "servers where we have already met" and needs nothing from anyone.
 
 ### Why this is worth doing on its own
 
@@ -106,6 +116,102 @@ safely for you" is the thing this design exists to avoid.
 **Fingerprint:** `base32(sha256(pubkey))[:20]`, grouped for reading aloud. This is
 what a user pastes into an invitation, and what a server shows next to a bound
 key so a human can compare.
+
+---
+
+## Networks
+
+Above servers sits a **network**: a trust domain that authenticates humans and
+vouches for them to its member servers. Servers do content. Networks do identity,
+and nothing else — no messages, no presence, no occupancy ever reaches one.
+
+A server may belong to several networks. A person may belong to several. Neither
+relationship is exclusive, and that is what makes the privacy boundary work.
+
+### Three keys, and who learns what
+
+| | derived as | who sees it | what they learn |
+|---|---|---|---|
+| **root** | generated on device | nobody, ever | — |
+| **netkey** | `HKDF(root, network)` | the network | a verified human, and which of its servers they joined |
+| **serverkey** | `HKDF(root, network‖server)` | the server | an opaque pseudonym, vouched by network N |
+
+A server holds an account keyed on `serverkey` and nothing more. It cannot reach
+the network identity behind it, cannot recognise the same person on another
+server, and cannot connect anyone to a second network at all.
+
+**The network attests; it does not issue.** The client derives every key and the
+root never leaves the device. A network that generated your key could impersonate
+you to its own servers, which is the whole reason the derivation runs client-side.
+
+**Determinism is the anti-sybil mechanism.** Because `serverkey` is derived rather
+than chosen, one person yields exactly one pseudonym per server per network. The
+server gets sybil resistance without learning anything about anyone — it does not
+need to know who you are to know there cannot be two of you. Protect this property
+in later decisions; anti-sybil and anonymity in one mechanism is rare.
+
+### Why the network layer exists at all
+
+A self-generated key proves continuity and nothing else: keys are free, so they
+carry no scarcity and cannot resist spam. The network is where scarcity enters —
+it can demand email, phone, payment, invitation, whatever it judges necessary, and
+every server in it inherits that assurance without running the check itself.
+
+It also makes "ban the source" mean something. Against bare keys there is no
+source: a banned key costs nothing to replace. A network is an accountable party,
+so a network that emits mostly spam can be dropped by other operators in one
+decision.
+
+### The costs, accepted deliberately
+
+**The network is a honeypot.** It knows a verified identity *and* the list of its
+servers you are on — strictly more than any single server knows. That is the price
+of the gate.
+
+  *Upgrade path:* the network signs a **blinded** `serverkey`, certifying "a vetted
+  human" without learning where the voucher is spent (Privacy Pass, blind
+  signatures — deployed technology, not research). It costs the determinism above:
+  a network that cannot see what it signs cannot stop you collecting many vouchers
+  for one server, so issuance rate-limits have to recover what derivation gave for
+  free. Build the simple version, leave the seam.
+
+**Ban evasion across networks is structural.** A server in two networks, and a
+person in both, yields two unlinkable pseudonyms on that server. Ban one, return
+as the other; the server cannot detect it, because that is exactly the property
+being bought. The only levers are policy — accept one network per server, or
+accept the risk and lean on the network's own gate. This is the standard trade of
+every anonymous system, and it is written here so a moderator does not discover it.
+
+**In-house deployments have no such property.** When one operator runs both the
+network and a server, they hold both sides and nothing cryptographic prevents them
+joining the dots. This is not a flaw to fix — it is the ordinary shape for an
+organisation running its own deployment. The client should show which network
+vouches you on which server, so "this operator can identify me here" is visible
+rather than inferred.
+
+### Vouchers
+
+A voucher is a short-lived signed assertion from a network about a `serverkey`.
+The shape, and its failure mode, are the Jitsi token's: see "One hazard to not
+recreate" below, which applies here word for word.
+
+**Carry an assurance level.** A voucher must say what was actually checked — email,
+phone, payment instrument, government ID, in person — not merely that something
+was. Without it, every server that federates implicitly trusts the weakest verifier
+it accepts, and no operator can say "email to read, phone to post links." This is
+the field that cannot be added later without breaking every issuer and consumer at
+once.
+
+**Expire them.** Freshness does most of revocation's work, exactly as the two-minute
+Jitsi token does.
+
+**A hosted verification service is a natural product here**, precisely because the
+network touches no content: it holds far less data than a chat server but far more
+sensitive data per record. Anyone offering one should store the verification
+*result* and never the evidence. Note the gravity, too — servers accepting only two
+or three well-known networks is the "Sign in with Google" ending, arriving by
+default. The counterweight is keeping a network cheap enough to self-host that a
+community can vouch for its own people and still be accepted.
 
 ---
 
@@ -346,14 +452,42 @@ when tempted to widen scope.
 
 ## Open decisions
 
-**Correlation across servers.** Presenting the same public key everywhere lets
-any two servers confirm you are the same person by comparing one string. That may
-be exactly what is wanted; it is also unfixable after the fact. The alternative is
-per-server subkeys, `HKDF(root, server_origin)`, unlinkable by default, with the
-root reserved for invitations and vouching. Cost: your fingerprint is no longer
-one thing you can hand someone. The protocol above already treats the presented
-key as a field, so this can be decided later — but decide it before anyone has
-keys worth keeping.
+**Correlation across servers — SETTLED.** Per-server subkeys, as in "Networks"
+above. The requirement is that nothing reveals a person's presence on another
+server unless they disclose it themselves, to someone specific, which a single
+presented key cannot satisfy: correlation would not be an endpoint anyone had to
+call, it would be automatic for any two parties who saw the key twice.
+
+The costs are real and were taken knowingly: no portable attestations between
+networks, no cross-server reputation, no cascading bans, and no single fingerprint
+to hand someone. What remains is server-local, which is where the practical
+anti-spam value was anyway — registration walls, invite chains, progressive trust
+for unknown keys, per-server bans — plus the network gate above.
+
+**Voluntary disclosure** needs no server and no exotic cryptography. Both subkeys
+derive from one root, so sign one statement with *both*:
+
+> `subkey_A` and `subkey_B` share a root — signed by each
+
+The recipient already knows your key on each server and verifies both signatures
+directly; neither server is involved and neither learns the link. Bind the
+statement to the recipient and a nonce so it is addressed rather than free-floating.
+Note the honest limit: a signature is copyable, so binding makes onward sharing
+awkward, not impossible. What you get is that disclosure never happens *without*
+you, not that it cannot spread afterwards.
+
+**The leaks that are not cryptographic** will undo all of this if left alone, and
+none of them are about keys:
+
+- *Profile data.* The same display name, avatar or email on two servers correlates
+  instantly. The client must not propagate profile fields across servers, and
+  probably should not offer to.
+- *The client's list of networks and servers.* This is now the sensitive artifact:
+  maths protects the identifiers, nothing protects a list naming where you are. It
+  must be encrypted at rest, never synced in the clear, never readable by a server.
+  A stolen root is only as damaging as the list that says where to spend it.
+- *Behaviour* — hours, writing style, upload filenames — is out of scope, and is
+  said to be out of scope rather than quietly assumed away.
 
 **Theft recovery is O(servers).** Local revocation means a stolen root key must be
 revoked on every server individually, by a user who may not remember the whole
@@ -384,13 +518,25 @@ Each rung is independently useful and independently abandonable.
 | | what | depends on |
 |---|---|---|
 | **F0** | this document | — |
-| **F1** | `.well-known/zulip-meet/server` descriptor + a shell that lists servers and opens them, logging in the existing way | — |
-| **F2** | the key library: generate, wrap via WebAuthn `prf`/Argon2id, recovery phrase, sign. Standalone, testable, no server | — |
-| **F3** | `ZulipMeetKeyBackend` + challenge/verify endpoints + "add a key" in settings | F2 |
-| **F4** | shell wiring: per-server partitions, credential isolation, select-server-and-you-are-in | F1, F3 |
+| **F1** | `.well-known/zulip-meet/` descriptors — a server's, and a network's (signing key, policy, member servers) — plus a shell that lists them and opens a server, logging in the existing way | — |
+| **F2** | the key library: generate a root, derive `netkey` and `serverkey`, wrap via WebAuthn `prf`/Argon2id, recovery phrase, sign, and produce a two-key disclosure statement. Standalone, testable, no server | — |
+| **F3** | `ZulipMeetKeyBackend` + challenge/verify endpoints + "add a key" in settings. Accepts a `serverkey`; a voucher is not required yet | F2 |
+| **F4** | shell wiring: per-server partitions, credential isolation, select-server-and-you-are-in, the local-evidence DM picker | F1, F3 |
 | **F5** | invite-gated key registration for accounts that did not exist first | F3 |
+| **F6** | a reference network: verification of whatever it chooses to check, voucher issuance carrying an assurance level and an expiry, and server-side voucher validation | F3 |
 
 F1 and F2 do not touch each other and can be built in either order. F3 is the
 first rung that requires a Zulip dev environment, and the first that can be got
 wrong in a way that matters — the `aud` check and the single-use nonce are where
 the review effort belongs.
+
+F6 is where spam resistance actually arrives, and it is deliberately last: every
+rung before it is useful to a private deployment that trusts everyone it lets in,
+which is the case that already works today. It is also the rung with the most
+review surface, since a server that accepts a voucher without checking issuer,
+audience, expiry and assurance level has reproduced the bug this project already
+shipped once — a signature verified and nothing else enforced.
+
+One property to preserve across all of them: **nothing above F2 may require the
+root key**. The moment a rung needs the root rather than a derived subkey, the
+unlinkability in "Networks" is gone, and it will go quietly.
