@@ -1,9 +1,15 @@
-# Zulip Meet
+# Consort
 
-**Conversation-scoped Jitsi video calls in Zulip.** The channel or direct message you are in
-decides which Jitsi room you can join — enforced end to end by short-lived, room-scoped tokens —
-with the call embedded and minimizable *inside* Zulip. Channels surface who is on a call through a
-live, call-aware left sidebar; direct messages get a roster message in the conversation.
+**Voice, video and chat where the conversation decides who may join.** A fork of
+[Zulip](https://zulip.com) in which the channel or direct message you are in determines which Jitsi
+room you can enter — enforced end to end by short-lived, room-scoped tokens — with the call
+embedded and minimizable *inside* the app. Channels surface who is talking through a live,
+call-aware sidebar; direct messages get a roster message in the conversation; lounges give a channel
+a set of ephemeral rooms to drop into.
+
+A consort is a set of independent instruments playing as one piece, which is the shape this is
+growing into: servers that stay sovereign over their own conversations, and one identity that
+travels between them. That second half is [being designed now](docs/federation.md) and is not built.
 
 Zulip ships a video-call button that opens a Jitsi room with a `Math.random()` name and no access
 check: any member of the organization can mint a link to any room. That is harmless while the room
@@ -12,7 +18,7 @@ proper in-app calling experience on top.
 
 ## Demo
 
-![Zulip Meet — starting a call from a conversation, the call embedded in Zulip, and minimize / maximize / drag-resize](docs/demo.gif)
+![Consort — starting a call from a conversation, the call embedded in Zulip, and minimize / maximize / drag-resize](docs/demo.gif)
 
 ▶ **[Watch the full-quality walkthrough](docs/demo.mp4)** — 1080p60, without the GIF's compression.
 
@@ -54,14 +60,14 @@ Zulip server (patched)  ──mint room-scoped JWT──▶  browser ──join�
   │                                                                      │
   │  ◀─────────── occupancy (event_sync) ──────────────────────────────┘
   ▼
-core-hook  ◀─ channel: push occupancy → sidebar event · DM/group: post/edit message ─  zulip-meet-conferencing
+core-hook  ◀─ channel: push occupancy → sidebar event · DM/group: post/edit message ─  consort-conferencing
 ```
 
 1. Click call → `POST /calls/jitsi/create`: Zulip verifies you belong to the conversation, derives
    the room, and mints a short-lived JWT scoped to that room and tenant.
 2. The embedded client joins the Jitsi room with the token; Prosody validates room + tenant and sets
    moderator from the token's claim.
-3. Prosody's `event_sync` streams occupancy to **zulip-meet-conferencing**, which owns call state
+3. Prosody's `event_sync` streams occupancy to **consort-conferencing**, which owns call state
    and timing. Through Zulip's internal **core hook** it then either pushes a **channel's** live
    roster to the channel's subscribers as a client event — the call-aware sidebar — or, for a **DM
    or group**, posts and edits a roster message authored as the initiator.
@@ -70,24 +76,24 @@ core-hook  ◀─ channel: push occupancy → sidebar event · DM/group: post/ed
 
 | Directory | What it is |
 |---|---|
-| [`zulip-meet-conferencing/`](zulip-meet-conferencing/) | The external service: occupancy, call state, timing; the channel occupancy push and the DM/group roster message, both via the hook. Fully tested. |
+| [`consort-conferencing/`](consort-conferencing/) | The external service: occupancy, call state, timing; the channel occupancy push and the DM/group roster message, both via the hook. Fully tested. |
 | [`zulip-server-patch/`](zulip-server-patch/) | The Zulip server changes: the room-derivation + JWT mint, the membership-checked `calls/jitsi/create` endpoint, the internal core-hook endpoints, and the occupancy widget. |
 | [`embedded-call/`](embedded-call/) | The in-Zulip embedded call: a `JitsiMeetExternalAPI` iframe at the app root (drag/minimize/maximize/resize), the call-aware sidebar, the in-iframe speaking relay (`jitsi-speaking-relay.js`), and CSP notes. |
 | [`jitsi-token-harness/`](jitsi-token-harness/) | A standalone harness that *proves* the isolation — a token for one room or tenant is refused at another — against a real Jitsi/Prosody stack. |
-| [`deploy/`](deploy/) | The installer: the two upstream compose files vendored verbatim at a pinned tag, the overlay that is our entire diff against them, Caddy, the two custom image builds, and `zulip-meet`. |
+| [`deploy/`](deploy/) | The installer: the two upstream compose files vendored verbatim at a pinned tag, the overlay that is our entire diff against them, Caddy, the two custom image builds, and `consort`. |
 | [`docs/`](docs/) | Architecture (rev4), the Prosody `event_sync` runbook, and design notes. |
 
 Prosody-side plugins used: `event_sync` (occupancy → the service), `muc_census` (reconciliation),
 `token_affiliation_legacy` + `disable_cascading_set` (moderator strictly from the token), and Jitsi's
-own token verification. See `zulip-meet-conferencing/deploy/prosody/` and `docs/`.
+own token verification. See `consort-conferencing/deploy/prosody/` and `docs/`.
 
 ## Run it
 
 Docker, and one command:
 
 ```bash
-git clone https://github.com/Dyslectric/zulip-meet.git
-cd zulip-meet/deploy && ./zulip-meet up
+git clone https://github.com/Dyslectric/consort.git
+cd consort/deploy && ./consort up
 ```
 
 That checks the machine, generates every secret, pulls eleven containers, waits out Zulip's first
@@ -97,7 +103,7 @@ sound, and prints a URL and a password. Nothing to configure and nothing to fill
 Then, before your first call:
 
 ```bash
-./zulip-meet trust
+./consort trust
 ```
 
 Both origins are served over HTTPS by a certificate authority generated on your machine, because

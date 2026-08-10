@@ -19,7 +19,7 @@
 
 	# Certificates from Caddy's own CA, generated on first start and kept in the
 	# caddy-data volume. Browsers will not trust that CA until it is imported —
-	# `zulip-meet trust` prints how — and until then the meet iframe fails
+	# `consort trust` prints how — and until then the meet iframe fails
 	# *silently*, because a browser does not prompt about a bad certificate
 	# inside a frame. Zulip detects that case and says so rather than leaving the
 	# call button doing nothing (see web/src/embedded_call.ts).

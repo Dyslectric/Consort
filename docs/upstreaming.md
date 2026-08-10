@@ -1,4 +1,4 @@
-# Upstreaming Zulip Meet
+# Upstreaming Consort
 
 What it would take to offer the pieces of this project to the upstream **Zulip** and
 **Jitsi** projects — component by component, with the honest triage of what is actually
@@ -36,7 +36,7 @@ not a plugin.
 | `jitsi-token-harness/prosody-plugins-custom/` | jitsi-contrib | **Nothing new.** | The only file, `mod_token_no_wildcard.lua`, is a vendored copy of an existing `jitsi-contrib` module, not original work. |
 | Prosody config / token schema (`docs/architecture.md`) | jitsi-meet handbook | **Docs, maybe.** | Multi-tenant token verification is thinly documented upstream; a handbook PR is the realistic contribution. No code. |
 | `embedded-call/` — in-Zulip minimizable iframe | zulip/zulip (web) | **Probably not.** | Large frontend surface Zulip may replace with native calling (#28505); offer only if maintainers want it, and not before the calls patch lands. |
-| `zulip-meet-conferencing/` — occupancy + roster service | — (its own project) | **Not upstreamable.** | Deliberately an external service; belongs outside the chat server. Publish it standalone; don't try to merge it into Zulip. |
+| `consort-conferencing/` — occupancy + roster service | — (its own project) | **Not upstreamable.** | Deliberately an external service; belongs outside the chat server. Publish it standalone; don't try to merge it into Zulip. |
 | Authentik SSO / enrollment | — | **Nothing to upstream.** | Zulip already supports SAML natively; this is settings, not code. |
 
 The rest of the document expands the two rows that have any upstream action: the Zulip calls
@@ -209,7 +209,7 @@ Recording *why* these aren't upstream contributions, so it's a decision on recor
   (2) it's **unproven** (README marks it not-yet-exercised in the dev env). If you ever offer it,
   do so *after* the calls patch lands and only if maintainers signal they want the embedded UX
   rather than their own. Until then it lives in your fork.
-- **`zulip-meet-conferencing/` (occupancy + roster service).** Deliberately external — token
+- **`consort-conferencing/` (occupancy + roster service).** Deliberately external — token
   minting must be in-process in Zulip, but state machines, timers, occupancy, and message edits
   belong outside where they deploy without restarting the chat server. This is an architectural
   choice (architecture.md §5.1), not a limitation. **Publish it as its own open-source project**

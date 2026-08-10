@@ -17,7 +17,7 @@ that.
 >    `/defaults/prosody.cfg.lua` (as `USER root`, then `USER 1000` back or Prosody
 >    refuses to run), with the rendered `event_sync.cfg.lua` placed in the
 >    persistent `prosody-plugins-custom` dir. See
->    `zulip-meet-conferencing/deploy/prosody/Dockerfile`.
+>    `consort-conferencing/deploy/prosody/Dockerfile`.
 > 2. **Prosody's Lua HTTP resolver cannot resolve a bare Docker service name.**
 >    A shell `wget` to `http://conferencing:8080` works, but event_sync logs
 >    `API Response code 0. Will retry`. Use the container's **IP** in `api_prefix`
@@ -191,7 +191,7 @@ XMPP_MUC_MODULES=muc_census
 
 `event_sync_component` is its own Prosody `Component`, which no docker-jitsi-meet
 env var can express, so it needs the config block in
-[`zulip-meet-conferencing/deploy/prosody/event_sync.cfg.lua`](../zulip-meet-conferencing/deploy/prosody/event_sync.cfg.lua)
+[`consort-conferencing/deploy/prosody/event_sync.cfg.lua`](../consort-conferencing/deploy/prosody/event_sync.cfg.lua)
 loaded by Prosody's main config.
 
 **Confirmed delivery model (2026-08-02).** On this image the runtime config dir
@@ -227,7 +227,7 @@ Then `docker compose up -d --force-recreate prosody`.
 fails there without stopping Prosody — green container, dead pipeline.
 
 A ready-to-copy override with all three mounts is in
-[`zulip-meet-conferencing/deploy/prosody/docker-compose.override.example.yml`](../zulip-meet-conferencing/deploy/prosody/docker-compose.override.example.yml).
+[`consort-conferencing/deploy/prosody/docker-compose.override.example.yml`](../consort-conferencing/deploy/prosody/docker-compose.override.example.yml).
 
 ### Stage it: event_sync first, census second
 

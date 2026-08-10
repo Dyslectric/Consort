@@ -1,8 +1,8 @@
-# Deploying Zulip Meet
+# Deploying Consort
 
 ```bash
-./zulip-meet up
-./zulip-meet trust
+./consort up
+./consort trust
 ```
 
 The first brings the whole stack up from nothing. The second tells you how to trust the certificate
@@ -96,7 +96,7 @@ these wrong looks, from the outside, exactly like a working one.
 
 ## When something is wrong
 
-**The call panel does nothing.** The certificate authority is not trusted. Run `./zulip-meet trust`.
+**The call panel does nothing.** The certificate authority is not trusted. Run `./consort trust`.
 Zulip itself will let you click through a warning; the iframe will not, and browsers do not prompt
 about a certificate inside one. Zulip detects this case and says so rather than leaving the button
 dead — if you see no message at all, the problem is something else.

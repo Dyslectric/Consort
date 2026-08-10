@@ -1,7 +1,7 @@
 ---
 # Build the four images locally instead of pulling them.
 #
-# Add it to COMPOSE_FILE in .env — `zulip-meet up --build` does that for you —
+# Add it to COMPOSE_FILE in .env — `consort up --build` does that for you —
 # and the stack runs with no registry involved at all. Useful for three things:
 # hacking on any of the four components, running before the images have ever been
 # published, and reproducing a build that CI got wrong.
@@ -26,11 +26,11 @@ services:
 
   conferencing:
     build:
-      context: ../zulip-meet-conferencing
+      context: ../consort-conferencing
 
   # Both Jitsi images take the repository root as their context, because each
   # needs a file that lives outside its own directory — the speaking relay in
-  # embedded-call/, the Lua in jitsi-token-harness/ and zulip-meet-conferencing/.
+  # embedded-call/, the Lua in jitsi-token-harness/ and consort-conferencing/.
   # The root .dockerignore keeps that from shipping the demo video.
   prosody:
     build:
