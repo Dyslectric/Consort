@@ -74,27 +74,56 @@ core-hook  ◀─ channel: push occupancy → sidebar event · DM/group: post/ed
 | [`zulip-server-patch/`](zulip-server-patch/) | The Zulip server changes: the room-derivation + JWT mint, the membership-checked `calls/jitsi/create` endpoint, the internal core-hook endpoints, and the occupancy widget. |
 | [`embedded-call/`](embedded-call/) | The in-Zulip embedded call: a `JitsiMeetExternalAPI` iframe at the app root (drag/minimize/maximize/resize), the call-aware sidebar, the in-iframe speaking relay (`jitsi-speaking-relay.js`), and CSP notes. |
 | [`jitsi-token-harness/`](jitsi-token-harness/) | A standalone harness that *proves* the isolation — a token for one room or tenant is refused at another — against a real Jitsi/Prosody stack. |
-| [`docs/`](docs/) | Architecture (rev4), the Prosody `event_sync` runbook, and deployment notes. |
+| [`deploy/`](deploy/) | The installer: the two upstream compose files vendored verbatim at a pinned tag, the overlay that is our entire diff against them, Caddy, the two custom image builds, and `zulip-meet`. |
+| [`docs/`](docs/) | Architecture (rev4), the Prosody `event_sync` runbook, and design notes. |
 
 Prosody-side plugins used: `event_sync` (occupancy → the service), `muc_census` (reconciliation),
 `token_affiliation_legacy` + `disable_cascading_set` (moderator strictly from the token), and Jitsi's
 own token verification. See `zulip-meet-conferencing/deploy/prosody/` and `docs/`.
 
-## Requirements
+## Run it
 
-- A Zulip server built from [the fork carrying the patch](https://github.com/Dyslectric/zulip-meet-integration/tree/jitsi-jwt) (`zulip-server-patch/`).
-- A token-authenticated Jitsi (docker-jitsi-meet) with JWT auth and the custom Prosody plugins.
-- The conferencing service, reachable from both Zulip and Prosody on an internal network.
+Docker, and one command:
 
-This is a working deployment, not a proof of concept — it runs in production. Deployment specifics
-(networking, secrets, the custom images) are in `docs/` and each component's README.
+```bash
+git clone https://github.com/Dyslectric/zulip-meet.git
+cd zulip-meet/deploy && ./zulip-meet up
+```
+
+That checks the machine, generates every secret, pulls eleven containers, waits out Zulip's first
+boot, creates an organization with an owner and a conferencing bot, verifies the deployment is
+sound, and prints a URL and a password. Nothing to configure and nothing to fill in.
+
+Then, before your first call:
+
+```bash
+./zulip-meet trust
+```
+
+Both origins are served over HTTPS by a certificate authority generated on your machine, because
+Jitsi's `external_api.js` hardcodes `https://` when it builds the call's iframe — the video server
+cannot be plain HTTP even on a laptop. Until that authority is trusted, the call panel fails
+**silently**: browsers do not prompt about a certificate inside an iframe, they just refuse it.
+`trust` prints the one-line import for your platform.
+
+| | |
+|---|---|
+| **Needs** | Docker with Compose 2.24+, about 8 GB of memory and 10 GB of disk |
+| **Downloads** | ~2 GB on the first run |
+| **Windows** | Docker Desktop; run the command from Git Bash |
+| **Also** | `verify` re-runs the checks · `logs` follows them · `down` stops · `destroy` removes everything |
+
+Configuration lives in one generated `deploy/.env`; editing it and running `up` again reconciles.
+For a deployment other people can reach — a real domain, real certificates — see
+[`deploy/README.md`](deploy/README.md).
 
 ## Status
 
-Live in production: conversation-scoped calls; the embedded draggable/minimizable panel; the
-call-aware sidebar (speaker/lock icons, participant avatars, per-user speaking rings, real-time
-push); DM/group roster messages; and moderator-from-Zulip-roles. Not built yet: the direct-message
-*ringing* flow, and native mobile (a Flutter client is planned).
+Runs in production, and installs from scratch in one command. Working: conversation-scoped calls;
+the embedded draggable/minimizable panel; the call-aware sidebar (speaker/lock icons, participant
+avatars, per-user speaking rings, real-time push); DM/group roster messages; lounges and guest
+access; and moderator-from-Zulip-roles. Not built yet: the direct-message *ringing* flow, and
+native mobile (a Flutter client is planned).
 
 ## License
 
