@@ -299,8 +299,18 @@ cmd_bootstrap() {
     # `create_realm` is Zulip's own scripted path for this; it makes the realm
     # and its first owner in one step. An existing realm makes it fail, which is
     # why this whole function is skipped once the bot key is recorded.
-    manage create_realm "$org" --string-id="" "$admin_email" "Admin" \
-        --password-file=/tmp/zm-pw >/dev/null
+    #
+    # Every option goes before the three positionals, and the positionals stay
+    # contiguous. `realm_name [<email>] [<full name>]` has two optional
+    # positionals, and argparse fills them from the first unbroken run of
+    # positional arguments it sees — put an option in the middle and the ones
+    # after it become "unrecognized arguments" instead. The cost of getting that
+    # wrong is not just the error: without an email and full name, the command
+    # falls back to input() prompts, and stdin is closed here.
+    #
+    # --string-id is omitted because its default, the empty string, *is* the root
+    # domain, which is what EXTERNAL_HOST serves.
+    manage create_realm --password-file=/tmp/zm-pw "$org" "$admin_email" "Admin" >/dev/null
     ok "organization created, owner ${admin_email}"
 
     # No management command creates a bot, so this goes through the same action
