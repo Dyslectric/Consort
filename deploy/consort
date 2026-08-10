@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Zulip Meet — bring the whole stack up on one machine.
+# Consort — bring the whole stack up on one machine.
 #
-#   ./zulip-meet up          everything: check, generate, pull, start, bootstrap, verify
-#   ./zulip-meet trust       how to make the browser trust the local certificate
-#   ./zulip-meet verify      re-run the checks against a running stack
-#   ./zulip-meet down        stop, keeping all data
-#   ./zulip-meet destroy     stop and delete every volume, secret and generated file
+#   ./consort up          everything: check, generate, pull, start, bootstrap, verify
+#   ./consort trust       how to make the browser trust the local certificate
+#   ./consort verify      re-run the checks against a running stack
+#   ./consort down        stop, keeping all data
+#   ./consort destroy     stop and delete every volume, secret and generated file
 #
 # `up` is idempotent: run it again after editing .env and it reconciles rather
 # than starting over. It never overwrites an existing .env or secret.
@@ -263,7 +263,7 @@ wait_for_zulip() {
         # --resolve because *.localhost is resolved by browsers, not by the
         # system resolver: curl would otherwise fail to look the name up at all.
         # -k because the certificate is from Caddy's own CA, which this machine
-        # has not been told to trust yet — `zulip-meet trust` is how.
+        # has not been told to trust yet — `consort trust` is how.
         if curl -skf --resolve "${host}:${port}:127.0.0.1" -o /dev/null "$url"; then
             ok "Zulip is answering"
             return 0
@@ -272,7 +272,7 @@ wait_for_zulip() {
         waited=$((waited + 5))
         [ $((waited % 60)) -eq 0 ] && say "  ${DIM}still waiting (${waited}s)${RESET}"
     done
-    die "Zulip did not come up within ${limit}s. Try: ./zulip-meet logs zulip"
+    die "Zulip did not come up within ${limit}s. Try: ./consort logs zulip"
 }
 
 manage() {
@@ -283,7 +283,7 @@ cmd_bootstrap() {
     local admin_email bot_email org
     admin_email=$(env_get ZULIP_ADMIN_EMAIL); admin_email=${admin_email:-admin@example.com}
     bot_email="conference-bot@${admin_email#*@}"
-    org=${ZULIP_ORG_NAME:-Zulip Meet}
+    org=${ZULIP_ORG_NAME:-Consort}
 
     if [ -n "$(env_get CONFERENCING_BOT_API_KEY)" ]; then
         ok "already bootstrapped"
@@ -339,7 +339,7 @@ PY
     key=$(printf '%s' "$out" | sed -n 's/^ZM_BOT_API_KEY=//p' | tail -n 1)
     compose exec -T -u zulip zulip rm -f /tmp/zm-pw || true
 
-    [ -n "$key" ] || die "the bot was not created; run './zulip-meet logs zulip' and look for a traceback."
+    [ -n "$key" ] || die "the bot was not created; run './consort logs zulip' and look for a traceback."
 
     env_set CONFERENCING_BOT_EMAIL "$bot_email"
     env_set CONFERENCING_BOT_API_KEY "$key"
@@ -448,9 +448,9 @@ cmd_trust() {
     say "    ${BOLD}${root}${RESET}"
     say ""
     say "  ${BOLD}Linux${RESET} (Chrome/Chromium, per-profile NSS store):"
-    say "    certutil -d sql:\$HOME/.pki/nssdb -A -t 'C,,' -n zulip-meet -i '$root'"
+    say "    certutil -d sql:\$HOME/.pki/nssdb -A -t 'C,,' -n consort -i '$root'"
     say "  ${BOLD}Linux${RESET} (system-wide):"
-    say "    sudo cp '$root' /usr/local/share/ca-certificates/zulip-meet.crt && sudo update-ca-certificates"
+    say "    sudo cp '$root' /usr/local/share/ca-certificates/consort.crt && sudo update-ca-certificates"
     say "  ${BOLD}Windows${RESET} (run in an elevated PowerShell; this is where the browser looks,"
     say "  even when the stack runs inside WSL):"
     say "    Import-Certificate -FilePath '$root' -CertStoreLocation Cert:\\LocalMachine\\Root"
@@ -472,10 +472,10 @@ cmd_up() {
 
     # `up --build` is sticky: it records the choice in .env so every later run
     # keeps building rather than trying to pull images that may not be published
-    # yet. Undo it by setting ZULIP_MEET_BUILD=0.
-    [ "${1:-}" = "--build" ] && env_set ZULIP_MEET_BUILD 1
+    # yet. Undo it by setting CONSORT_BUILD=0.
+    [ "${1:-}" = "--build" ] && env_set CONSORT_BUILD 1
 
-    if [ "$(env_get ZULIP_MEET_BUILD)" = "1" ]; then
+    if [ "$(env_get CONSORT_BUILD)" = "1" ]; then
         # build.yaml only adds `build:` blocks; the image names come from
         # overlay.yaml either way, so what is built is tagged exactly as what
         # would have been pulled and everything downstream is identical.
@@ -507,7 +507,7 @@ cmd_up() {
     say "  Sign in   ${BOLD}${admin}${RESET}"
     say "  Password  ${BOLD}$(cat secrets/admin_password)${RESET}"
     say ""
-    say "  Run ${BOLD}./zulip-meet trust${RESET} before starting a call, or the video panel will"
+    say "  Run ${BOLD}./consort trust${RESET} before starting a call, or the video panel will"
     say "  silently refuse to load."
     say ""
 }
@@ -529,18 +529,18 @@ cmd_logs() { compose logs -f --tail=100 "$@"; }
 
 usage() {
     cat <<'EOF'
-Zulip Meet
+Consort
 
-  ./zulip-meet up          check, generate, pull, start, bootstrap and verify
-  ./zulip-meet up --build  the same, building the four images locally instead of
+  ./consort up          check, generate, pull, start, bootstrap and verify
+  ./consort up --build  the same, building the four images locally instead of
                            pulling them (remembered for later runs)
-  ./zulip-meet trust       how to trust the local certificate authority
-  ./zulip-meet verify      re-run the checks against a running stack
-  ./zulip-meet preflight   check this machine without changing anything
-  ./zulip-meet bootstrap   create the organization and bot (part of `up`)
-  ./zulip-meet logs [svc]  follow logs
-  ./zulip-meet down        stop, keeping all data
-  ./zulip-meet destroy     stop and delete every volume, secret and generated file
+  ./consort trust       how to trust the local certificate authority
+  ./consort verify      re-run the checks against a running stack
+  ./consort preflight   check this machine without changing anything
+  ./consort bootstrap   create the organization and bot (part of `up`)
+  ./consort logs [svc]  follow logs
+  ./consort down        stop, keeping all data
+  ./consort destroy     stop and delete every volume, secret and generated file
 
 Configuration lives in .env, generated on the first `up`. Editing it and running
 `up` again reconciles the stack; nothing already generated is overwritten.

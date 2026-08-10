@@ -75,7 +75,7 @@ services:
   # The conferencing service, reachable by Prosody at http://conferencing:8080
   # because it shares the meet.jitsi network and the service name resolves.
   conferencing:
-    build: ../zulip-meet-conferencing   # adjust to wherever the service code lives
+    build: ../consort-conferencing   # adjust to wherever the service code lives
     image: local/conferencing:latest
     restart: unless-stopped
     environment:

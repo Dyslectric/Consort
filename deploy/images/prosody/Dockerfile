@@ -1,4 +1,4 @@
-# Prosody, with everything Zulip Meet needs baked in.
+# Prosody, with everything Consort needs baked in.
 #
 # The deployment this grew out of mounted the Lua from a host directory. That is
 # what made a fresh install fragile: Docker creates a missing bind-mount source
@@ -69,7 +69,7 @@ RUN set -eux; \
 
 # Ours: the event_sync component's own config, which reads its bearer secret from
 # the environment rather than being rendered with a secret baked in.
-COPY zulip-meet-conferencing/deploy/prosody/event_sync.cfg.lua \
+COPY consort-conferencing/deploy/prosody/event_sync.cfg.lua \
      /prosody-plugins-custom/event_sync.cfg.lua
 
 RUN chown -R 1000:1000 /prosody-plugins-custom \
@@ -97,6 +97,6 @@ USER 1000
 #   XMPP_MUC_MODULES=...,token_affiliation   ENABLE_AUTO_OWNER=false
 #   JICOFO_ENABLE_AUTH=0                     DISABLE_PROFILE=true
 #
-# `zulip-meet verify` asserts all of them against the running stack, because
+# `consort verify` asserts all of them against the running stack, because
 # every one of them fails silently.
 # ---------------------------------------------------------------------------

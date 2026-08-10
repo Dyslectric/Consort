@@ -150,7 +150,7 @@ sides agree.
 ### 3. Add the event_sync component
 
 ```bash
-cp ~/zulip-jitsi-authentik/zulip-meet-conferencing/deploy/dev-jitsi/docker-compose.override.yml . && mkdir -p prosody-custom && cp ~/zulip-jitsi-authentik/zulip-meet-conferencing/deploy/prosody/Dockerfile prosody-custom/ && cp ~/zulip-jitsi-authentik/zulip-meet-conferencing/deploy/dev-jitsi/event_sync.cfg.lua ~/.jitsi-meet-cfg/prosody/prosody-plugins-custom/
+cp ~/zulip-jitsi-authentik/consort-conferencing/deploy/dev-jitsi/docker-compose.override.yml . && mkdir -p prosody-custom && cp ~/zulip-jitsi-authentik/consort-conferencing/deploy/prosody/Dockerfile prosody-custom/ && cp ~/zulip-jitsi-authentik/consort-conferencing/deploy/dev-jitsi/event_sync.cfg.lua ~/.jitsi-meet-cfg/prosody/prosody-plugins-custom/
 ```
 
 Then fetch the plugin itself, pinned rather than tracking `main` — a dev
@@ -187,7 +187,7 @@ Bound to `127.0.0.1` it is invisible from inside Docker, and the only symptom is
 Prosody logging a failed POST on every join.
 
 ```bash
-cd ~/zulip-jitsi-authentik/zulip-meet-conferencing && python3 scripts/stub_conferencing_service.py --bind 0.0.0.0 --no-auto-join
+cd ~/zulip-jitsi-authentik/consort-conferencing && python3 scripts/stub_conferencing_service.py --bind 0.0.0.0 --no-auto-join
 ```
 
 `--no-auto-join` is the point of this whole exercise: with Prosody reporting real

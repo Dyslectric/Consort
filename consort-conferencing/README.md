@@ -1,4 +1,4 @@
-# zulip-meet-conferencing
+# consort-conferencing
 
 The external service that keeps Zulip's call UI in sync with live Jitsi calls. It is the brain
 behind [conversation-scoped video calls in Zulip](https://github.com/Dyslectric/zulip-meet-integration/tree/jitsi-jwt):
@@ -11,7 +11,7 @@ is allowed into a call — stays in the Zulip server patch. This service observe
 never authorizes.
 
 ```
-  Prosody ──event_sync (occupancy)──▶  zulip-meet-conferencing  ──post / edit──▶  Zulip
+  Prosody ──event_sync (occupancy)──▶  consort-conferencing  ──post / edit──▶  Zulip
  (muc.…)  ◀──── /room-census ────────  (state · render · timing)   (core hook)
 ```
 

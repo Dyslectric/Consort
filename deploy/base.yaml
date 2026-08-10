@@ -11,4 +11,4 @@
 #
 # Listing this first makes deploy/ the project directory, which is what every
 # path in overlay.yaml and build.yaml is written against.
-name: zulip-meet
+name: consort

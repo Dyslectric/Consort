@@ -190,13 +190,13 @@ id.
 
 ### Dev environment
 
-- `zulip-meet-conferencing/scripts/stub_conferencing_service.py` — stdlib-only
+- `consort-conferencing/scripts/stub_conferencing_service.py` — stdlib-only
   stand-in with a control panel on :8080. It implements Prosody's four
   `event_sync` sinks, so with a local Jitsi the occupancy is **real**.
   Run it `--bind 0.0.0.0 --no-auto-join`. Its `--auto-join` default pretends
   whoever mints a token joined, which is what makes rooms appear to hold people
   who are not in them.
-- `zulip-meet-conferencing/deploy/dev-jitsi/` — local docker-jitsi-meet, with a
+- `consort-conferencing/deploy/dev-jitsi/` — local docker-jitsi-meet, with a
   runbook. **HTTPS is mandatory** even locally: `external_api.js` hardcodes
   `https://${domain}` for the iframe and takes a bare host, so an http-only Jitsi
   cannot be embedded at all.

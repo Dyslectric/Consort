@@ -56,12 +56,12 @@ jobs:
       matrix:
         include:
           - name: conferencing
-            context: zulip-meet-conferencing
-            dockerfile: zulip-meet-conferencing/Dockerfile
+            context: consort-conferencing
+            dockerfile: consort-conferencing/Dockerfile
           # Both Jitsi images take the repository root as their context, because
           # each needs a file from outside its own directory: the speaking relay
           # in embedded-call/, the Lua in jitsi-token-harness/ and
-          # zulip-meet-conferencing/. The root .dockerignore keeps that small.
+          # consort-conferencing/. The root .dockerignore keeps that small.
           - name: prosody
             context: .
             dockerfile: deploy/images/prosody/Dockerfile
@@ -87,7 +87,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-${{ matrix.name }}
+          images: ghcr.io/${{ steps.owner.outputs.name }}/consort-${{ matrix.name }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -163,7 +163,7 @@ jobs:
           # No tag here: each architecture is pushed as a bare digest and the
           # next job assembles them into one multi-arch tag. Tagging both would
           # mean whichever finished last silently won.
-          outputs: type=image,name=ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-server,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/${{ steps.owner.outputs.name }}/consort-server,push-by-digest=true,name-canonical=true,push=true
 
       - name: Record the digest
         run: |
@@ -208,7 +208,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-server
+          images: ghcr.io/${{ steps.owner.outputs.name }}/consort-server
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -224,4 +224,4 @@ jobs:
           # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
-            $(printf 'ghcr.io/${{ steps.owner.outputs.name }}/zulip-meet-server@sha256:%s ' *)
+            $(printf 'ghcr.io/${{ steps.owner.outputs.name }}/consort-server@sha256:%s ' *)

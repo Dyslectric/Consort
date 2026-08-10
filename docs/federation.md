@@ -252,7 +252,7 @@ Without single-use, a signature captured inside the validity window replays.
 ```json
 {
   "v": 1,
-  "typ": "zulip-meet.auth",
+  "typ": "consort.auth",
   "aud": "chat.example.org",
   "realm": "engineering",
   "key": "<base64url ed25519 public key>",
@@ -265,7 +265,7 @@ Without single-use, a signature captured inside the validity window replays.
 Signed over:
 
 ```
-"zulip-meet.auth.v1" || 0x00 || canonical_json(payload)
+"consort.auth.v1" || 0x00 || canonical_json(payload)
 ```
 
 Both halves of that construction are load-bearing:
@@ -341,7 +341,7 @@ would collapse this design back into that one.
 Adding a server to the list means typing a hostname. The shell then fetches:
 
 ```http
-GET https://chat.example.org/.well-known/zulip-meet/server
+GET https://chat.example.org/.well-known/consort/server
 ```
 ```json
 {
@@ -551,7 +551,7 @@ Each rung is independently useful and independently abandonable.
 | | what | depends on |
 |---|---|---|
 | **F0** | this document | — |
-| **F1** | `.well-known/zulip-meet/` descriptors — a server's, and a network's (signing key, policy, member servers) — plus a shell that lists them and opens a server, logging in the existing way | — |
+| **F1** | `.well-known/consort/` descriptors — a server's, and a network's (signing key, policy, member servers) — plus a shell that lists them and opens a server, logging in the existing way | — |
 | **F2** | the key library: generate a root, derive `netkey` and `serverkey`, wrap via WebAuthn `prf`/Argon2id, recovery phrase, sign, and produce a two-key disclosure statement. Standalone, testable, no server | — |
 | **F3** | `ZulipMeetKeyBackend` + challenge/verify endpoints + "add a key" in settings. Accepts a `serverkey`; a voucher is not required yet | F2 |
 | **F4** | shell wiring: per-server partitions, credential isolation, select-server-and-you-are-in, the local-evidence DM picker | F1, F3 |
