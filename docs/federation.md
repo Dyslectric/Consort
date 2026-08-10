@@ -402,10 +402,43 @@ key says which account you are, not which realms you may enter.
 
 ## The shell
 
-Owns three things: the key, the server list, and per-server credentials. It
-renders each server's own (forked) Zulip web app, which is what preserves the
-embedded call panel, the call-aware sidebar, lounges and everything else already
-built.
+Owns three things: the key, the network and server lists, and per-server
+credentials. It renders each server's own (forked) Zulip web app, which is what
+preserves the embedded call panel, the call-aware sidebar, lounges and everything
+else already built.
+
+### The network is the top-level selector
+
+Not a setting and not a badge — the thing you pick first, with servers nested
+inside it. This is what makes the two deployment shapes legible to a person
+instead of a diagram: your own network with your friends' accounts already on it
+is private communication, and your community's or employer's network is public
+communication, and choosing between them is a single deliberate act rather than an
+inference from a lock icon.
+
+It also does the work no notice can. The two shapes make opposite promises — in
+one the server knows a pseudonym, in the other the operator sees everything — and
+a person who cannot tell which they are in will eventually speak freely in the
+wrong one. Browser profiles are the precedent worth copying, including the visual
+part: distinct enough that being in the wrong one is obvious at a glance. Slack's
+workspace switcher is the cautionary version, and people post in the wrong
+workspace constantly.
+
+Three rules follow from making it the selector:
+
+- **Profile data propagates within a network, never across one.** Inside a network
+  the same display name and avatar on several servers leaks nothing the network
+  does not already know, and insisting otherwise is user-hostile. Across networks
+  it is the correlation this design exists to prevent.
+- **Never merge one server that you reach through two networks.** Two networks
+  means two pseudonyms and two accounts; showing them as one entry would have the
+  client reconstruct precisely the link the protocol refuses to.
+- **Be careful with any view that spans networks** — a unified inbox, global
+  search, merged notifications. The client legitimately knows everything, so
+  nothing is broken cryptographically; but it becomes the one surface where every
+  identity is visible at once, and this is an application whose users share their
+  screen during calls. A merged view discloses your whole network membership to
+  anyone watching, with no intent and no warning.
 
 ### Trap: do not embed a server in a cross-origin iframe
 
