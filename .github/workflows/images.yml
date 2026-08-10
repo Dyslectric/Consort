@@ -168,7 +168,11 @@ jobs:
       - name: Record the digest
         run: |
           mkdir -p /tmp/digests
-          touch "/tmp/digests/${{ steps.build.outputs.digest }}"
+          digest='${{ steps.build.outputs.digest }}'
+          # The filename is the bare hex, with the algorithm prefix stripped:
+          # upload-artifact rejects a colon outright (NTFS cannot store one), and
+          # the merge step puts the "sha256:" back when it builds the reference.
+          touch "/tmp/digests/${digest#sha256:}"
 
       - uses: actions/upload-artifact@v4
         with:
