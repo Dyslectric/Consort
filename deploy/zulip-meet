@@ -166,14 +166,26 @@ cmd_preflight() {
         ok "port $ingress is free"
     fi
 
-    # UDP cannot be probed by connecting, so this is best-effort and only runs
-    # where ss or netstat exists.
+    # UDP cannot be probed by connecting to it, so this reads the listener table
+    # instead — ss on a Linux host, netstat under Git Bash, and neither on some
+    # minimal images. When it cannot run it says so: a check that skips silently
+    # is indistinguishable from one that passed, and this particular clash is
+    # fatal — docker refuses to start the bridge at all.
+    local udp_busy=""
     if command -v ss >/dev/null 2>&1; then
-        if ss -lun 2>/dev/null | grep -qE "[:.]${jvb}\b"; then
-            warn "UDP port $jvb looks busy; media may not connect. Set JVB_PORT in .env."
-        else
-            ok "UDP port $jvb is free"
-        fi
+        udp_busy=$(ss -lun 2>/dev/null | grep -cE "[:.]${jvb}\b" || true)
+    elif command -v netstat >/dev/null 2>&1; then
+        udp_busy=$(netstat -an 2>/dev/null | grep -i udp | grep -cE "[:.]${jvb}\b" || true)
+    fi
+    if [ -z "$udp_busy" ]; then
+        warn "could not check UDP port $jvb (no ss or netstat here)."
+        say "      A clash appears later as 'Bind for 0.0.0.0:${jvb} failed: port is"
+        say "      already allocated' when the video bridge starts."
+    elif [ "$udp_busy" -gt 0 ]; then
+        bad "UDP port $jvb is already in use. Set JVB_PORT in .env to something free."
+        failed=1
+    else
+        ok "UDP port $jvb is free"
     fi
 
     say ""
