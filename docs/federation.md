@@ -8,7 +8,30 @@ independently what the key is entitled to. Nothing else crosses the boundary.
 
 This document is the design, before the code. It fixes the scope, names the
 threat that shapes every other decision, specifies the wire protocol, and lists
-what is still open. Work lives on branch `federation`.
+what is still open.
+
+---
+
+> ## Parked, 2026-08-11
+>
+> **Nothing here is being built, and no rung of the ladder has been started.**
+>
+> The reason is that most of the practical benefit already exists. Zulip Desktop
+> keeps several organizations side by side with separate sessions and refreshes
+> SAML/OIDC on its own; what federation adds on top of that is one key instead of
+> several logins. Real, but a convenience — and the work below is months, while
+> the thing actually missing from the product is that calls do not work in the
+> desktop client at all.
+>
+> So this waits for a reason to exist rather than the reverse. Two candidates
+> would supply one: wanting a public space where spam has to be kept out, which is
+> what the network layer is for; or wanting an identity that is not an account on
+> someone's server, which is what the key is for. Neither is pressing today.
+>
+> It is kept in full because the expensive part is not the code. The scope
+> boundary, the correlation decision and why it went the way it did, the three-key
+> derivation, the costs accepted knowingly — those took real thought and would
+> take it again. Anything read below is design, not a plan.
 
 ---
 
