@@ -7,10 +7,6 @@ embedded and minimizable *inside* the app. Channels surface who is talking throu
 call-aware sidebar; direct messages get a roster message in the conversation; lounges give a channel
 a set of ephemeral rooms to drop into.
 
-A consort is a set of independent instruments playing as one piece, which is the shape this is
-growing into: servers that stay sovereign over their own conversations, and one identity that
-travels between them. That second half is [being designed now](docs/federation.md) and is not built.
-
 Zulip ships a video-call button that opens a Jitsi room with a `Math.random()` name and no access
 check: any member of the organization can mint a link to any room. That is harmless while the room
 is unauthenticated anyway. This project replaces it with a real entitlement model and builds a
