@@ -1,4 +1,4 @@
-# Consort
+<h1><img src="brand/consort-logo.svg" alt="Consort" height="44"></h1>
 
 **Voice, video and chat where the conversation decides who may join.** A fork of
 [Zulip](https://zulip.com) in which the channel or direct message you are in determines which Jitsi
