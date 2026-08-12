@@ -65,6 +65,14 @@ structural rather than something you have to keep true by hand:
 Zulip's own secrets are files under `secrets/`, not environment variables, because an environment
 variable is visible in `docker inspect` to anything that can reach the daemon.
 
+`up` never overwrites an existing `.env` — it would take your secrets with it. So a setting added to
+`.env.example` after you installed does **not** appear in your `.env`, and a `git pull` followed by
+`up` will not pick it up. Copy the new line across by hand, then run `up` again:
+
+```bash
+grep DISABLE_DEEP_LINKING .env.example >> .env && ./consort up
+```
+
 ## Running it for other people
 
 The defaults are for one machine: `*.localhost` hostnames, a locally generated certificate
