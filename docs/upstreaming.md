@@ -99,14 +99,16 @@ plainly broken rather than proposing a direction. They are the easiest offers in
 to choose a screen or window unless the host supplies a handler, so screen sharing in a call
 simply does not work in Zulip Desktop. This adds the picker.
 
-> **Blocked, and not ready.** Clicking share in the desktop app produces no picker, against a
-> `run-dev` server as well as a deployed one. Every link in the chain checks out on inspection:
-> the toolbar is Jitsi's default and has the button; `external_api.min.js` delegates
-> `display-capture` on the iframe it creates; the permission handler returns `true` for
-> `display-capture` explicitly; `setDisplayMediaRequestHandler` is registered on
-> `persist:webviewsession`, the partition the webview actually uses; and the picker's mount
-> point `#screen-share-picker` is rendered unconditionally at startup. So the fault is at
-> runtime, in a link that only logs. Do not offer this until it demonstrably works.
+**Offer it together with `97be0bd`, not alone.** As committed, `8624d98` did not work: clicking
+share failed with `NotAllowedError` before the picker was reached. Electron does not report
+screen capture as the `display-capture` permission, which that commit assumed — it reports it as
+`media` with an *empty* `mediaTypes`, where `getUserMedia`'s carries `audio`/`video`. The media
+path read empty as malformed and denied it. `97be0bd` fixes that, and screen sharing including
+window audio is now confirmed working on Windows.
+
+Squash the two before offering them. Upstream should receive a feature that works, not a feature
+and its repair — and the fix is the interesting half, since the wrong assumption is one anyone
+reading Electron's permission names would make.
 
 **Candidate F — camera and microphone permission prompt.** `7beee80`; 10 files, +434. Asks
 before a call uses the camera or microphone, remembered per server. Touches the same three files
