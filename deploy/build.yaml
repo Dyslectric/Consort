@@ -39,9 +39,22 @@ services:
       args:
         JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
 
+  # Two Dockerfiles, one service. images/web layers a script onto the published
+  # app and takes seconds; images/web-src compiles the app from source, takes ten
+  # minutes, and is the only one that can carry a change to lib-jitsi-meet.
+  #
+  # Selected by variable rather than by editing this file, so a source build that
+  # misbehaves in the stack can be backed out with one env line rather than a
+  # commit. The four fork variables are read only by web-src; building the
+  # prebuilt path with them set draws an unused-build-arg warning from Docker and
+  # nothing worse.
   web:
     build:
       context: ..
-      dockerfile: deploy/images/web/Dockerfile
+      dockerfile: ${JITSI_WEB_DOCKERFILE:-deploy/images/web/Dockerfile}
       args:
         JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
+        LJM_REPO: ${LJM_REPO:-https://github.com/jitsi/lib-jitsi-meet.git}
+        LJM_REF: ${LJM_REF:-master}
+        JM_REPO: ${JM_REPO:-https://github.com/jitsi/jitsi-meet.git}
+        JM_REF: ${JM_REF:-master}
