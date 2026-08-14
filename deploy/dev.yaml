@@ -1,0 +1,90 @@
+---
+# The Jitsi web app from a working copy, with a reload instead of a rebuild.
+#
+# WHY: images/web-src compiles jitsi-meet from a git URL, which means every
+# change is push, clone, npm ci, webpack — about ten minutes to see a one-line
+# edit, and a BuildKit cache that will happily serve you the previous commit if
+# the ref did not change. This runs the app's own dev server against the stack
+# that is already up, so a save is visible in seconds and the source it builds
+# is the one on disk.
+#
+# USE:
+#   COMPOSE_FILE=...:dev.yaml docker compose up jitsi-dev
+#   then open http://localhost:8080/<room>
+#
+# The stack has to be running: this serves only the app, and proxies everything
+# else — config.js, BOSH, the websocket — to the web container beside it.
+#
+# It does NOT replace images/web-src. This is for iterating; that is what
+# actually ships, and a change should be built there before it is believed.
+
+services:
+  jitsi-dev:
+    image: node:24-bookworm
+    working_dir: /src
+    # npm ci only when node_modules is empty, so a restart is seconds rather
+    # than another install. Delete the volume to force a clean one.
+    #
+    # WEBPACK_DEV_SERVER is overridden rather than left to the Makefile, because
+    # webpack.config.js hardcodes `host: 'localhost'` — inside a container that
+    # is the container's own loopback, so the published port reaches nothing and
+    # the compile looks perfectly successful. --host takes precedence over the
+    # config, and everything before it in `make dev` still runs: the wasm, the
+    # css and lib-jitsi-meet's dist all have to be copied into place first.
+    command: >-
+      sh -c '[ -d node_modules/.bin ] || npm ci;
+      make dev WEBPACK_DEV_SERVER="./node_modules/.bin/webpack serve --mode development --progress --host 0.0.0.0"'
+    environment:
+      # Straight to the web container over the compose network rather than back
+      # out through Caddy: plain HTTP, so there is no certificate to trust, and
+      # no virtual host for the proxy's Host header to fail to match.
+      WEBPACK_DEV_SERVER_PROXY_TARGET: http://web:8000
+      # webpack.config.js serves TLS unless this is set, and a self-signed
+      # certificate on the dev server means the app's own wss client fails
+      # against it as well as the browser complaining. Plain HTTP is right here:
+      # nothing leaves the machine.
+      CODESPACES: "1"
+    volumes:
+      # The working copy, mounted rather than cloned — that is the entire point.
+      - ${JITSI_MEET_SRC:-../../jitsi-fork/jitsi-meet}:/src
+      # node_modules kept in a volume rather than on the bind mount. A Windows
+      # bind mount makes an install of this size unbearably slow, and the host
+      # copy is not wanted anyway.
+      - jitsi-dev-modules:/src/node_modules
+    ports:
+      - "${JITSI_DEV_PORT:-8080}:8080"
+    networks:
+      - meet.jitsi
+
+
+  # Anonymous rooms, for the dev server only.
+  #
+  # WHY it cannot be done in the web app: the token is the entitlement model, and
+  # it is Prosody and Jicofo that enforce it. Serving a different bundle on :8080
+  # changes nothing — the room still refuses anyone without a JWT minted by
+  # Zulip, and iterating on the audio settings should not require going through
+  # Zulip to get one.
+  #
+  # ENABLE_GUESTS goes with it: with authentication off, everyone arriving is by
+  # definition a guest, and Prosody rejects them all if guests are not allowed.
+  #
+  # This is the opposite of the production posture in .env.example, deliberately
+  # and only while this file is in COMPOSE_FILE. Take it out of the merge and the
+  # stack goes back to demanding a token, with no leftover state — Prosody's
+  # config is regenerated from the environment on every start.
+  prosody:
+    environment:
+      ENABLE_AUTH: "0"
+      ENABLE_GUESTS: "1"
+
+  jicofo:
+    environment:
+      ENABLE_AUTH: "0"
+
+  web:
+    environment:
+      ENABLE_AUTH: "0"
+      ENABLE_GUESTS: "1"
+
+volumes:
+  jitsi-dev-modules:
