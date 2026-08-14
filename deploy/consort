@@ -925,15 +925,36 @@ cmd_verify() {
     # shows a button, and the first person to learn it is broken is whoever
     # clicks it.
     if [ -n "$(env_get SAML_PROFILES)" ]; then
-        local ctype
-        ctype=$(curl -sk --resolve "${host}:${port}:127.0.0.1" -o /dev/null \
-            -w '%{content_type}' "https://${host}:${port}/saml/metadata.xml" || true)
-        case "$ctype" in
-            text/xml*) ok "SAML is enabled and Zulip is serving its SP metadata" ;;
+        local meta want got
+        meta=$(curl -sk --resolve "${host}:${port}:127.0.0.1" \
+            "https://${host}:${port}/saml/metadata.xml" || true)
+        case "$meta" in
+            *EntityDescriptor*)
+                ok "SAML is enabled and Zulip is serving its SP metadata"
+
+                # The entity ID Zulip *advertises* against the one it was given.
+                # These part company when the setting fails to take, and for this
+                # setting there is a specific way that happens silently — see the
+                # comment on SETTING_SOCIAL_AUTH_SAML_SP_ENTITY_ID in
+                # overlay.yaml. Worth its own check because the symptom is a
+                # login page that simply reappears: the IdP is happy, Zulip logs
+                # "not a valid audience" where nobody is looking, and every other
+                # part of the configuration is correct.
+                want=$(compose exec -T zulip printenv SETTING_SOCIAL_AUTH_SAML_SP_ENTITY_ID 2>/dev/null | tr -d '\r\n')
+                got=$(printf '%s' "$meta" | sed -n 's/.*entityID="\([^"]*\)".*/\1/p' | head -n 1)
+                if [ -z "$want" ] || [ "$want" = "$got" ]; then
+                    ok "SAML entity ID is ${got:-unset} — the IdP's audience must match"
+                else
+                    bad "Zulip advertises the SAML entity ID '$got', not '$want'."
+                    say "      Every assertion will be refused as 'not a valid audience', and the"
+                    say "      only sign of it is the login page coming back."
+                    failed=1
+                fi
+                ;;
             *)
-                bad "SAML is configured but /saml/metadata.xml served '${ctype:-nothing}', not XML."
-                say "      Zulip has not enabled SAMLAuthBackend, or it rejected the rendered"
-                say "      settings. Try: ./consort logs zulip"
+                bad "SAML is configured but /saml/metadata.xml did not serve SP metadata."
+                say "      Zulip has not enabled SAMLAuthBackend, or python3-saml rejected the"
+                say "      rendered settings. Try: ./consort logs zulip"
                 failed=1
                 ;;
         esac

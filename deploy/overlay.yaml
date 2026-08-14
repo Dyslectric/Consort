@@ -145,6 +145,23 @@ services:
     environment:
       SETTING_EXTERNAL_HOST: ${ZULIP_HOST:-zulip.localhost}:${INGRESS_PORT:-8443}
       SETTING_ZULIP_ADMINISTRATOR: ${ZULIP_ADMIN_EMAIL:-admin@example.com}
+      # This has to be stated, not left to Zulip, and the reason is an ordering
+      # trap in the image. Every SETTING_ variable is *appended* to a copy of
+      # prod_settings_template.py, but that template contains
+      #
+      #   SOCIAL_AUTH_SAML_SP_ENTITY_ID = "https://" + EXTERNAL_HOST
+      #
+      # which runs while EXTERNAL_HOST is still the template's own placeholder.
+      # The append above fixes EXTERNAL_HOST long after that line has already
+      # been evaluated, so the SP announces itself as https://zulip.example.com
+      # and the IdP's assertion is refused with "not a valid audience" — a
+      # failure that shows up as the login page reappearing with nothing said.
+      # Only two lines in that template read EXTERNAL_HOST at load time and both
+      # are SAML; the other sets the Organization block of the SP metadata, which
+      # nothing consumes.
+      #
+      # Whatever this is must be the Audience configured on the IdP side.
+      SETTING_SOCIAL_AUTH_SAML_SP_ENTITY_ID: https://${ZULIP_HOST:-zulip.localhost}:${INGRESS_PORT:-8443}
       # TLS terminates at Caddy, so Zulip has to be told which addresses are
       # allowed to speak for a client. This is the same CIDR the hook's nginx
       # block allows, and both Caddy and the conferencing service sit inside it.

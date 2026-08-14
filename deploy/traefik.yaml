@@ -69,6 +69,9 @@ services:
     environment:
       SETTING_EXTERNAL_HOST: ${ZULIP_HOST}
       SETTING_JITSI_SERVER_URL: https://${MEET_HOST}
+      # The SAML audience the IdP has to be configured with. See the comment on
+      # this setting in overlay.yaml for why it is stated at all.
+      SETTING_SOCIAL_AUTH_SAML_SP_ENTITY_ID: https://${ZULIP_HOST}
       # Both proxies, so nginx walks the X-Forwarded-For chain past Traefik and
       # Caddy to the address that actually made the request. EDGE_SUBNET has to
       # stay: it is also how the conferencing service is allowed to call the
