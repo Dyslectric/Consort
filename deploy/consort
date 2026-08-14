@@ -709,6 +709,32 @@ cmd_generate() {
             chmod 600 "secrets/$s"
         fi
     done
+
+    # memcached's password is the one exception, and it is not optional.
+    #
+    # Compose bind-mounts a file secret with the *host* file's owner and mode,
+    # and `memcached:alpine` is the only image in this stack with a USER — every
+    # other one starts as root and drops privileges itself after reading its
+    # password. So a root-owned 0600 file is unreadable by the process that
+    # needs it, and upstream's init is
+    #
+    #   echo "zulip@localhost:$(cat $MEMCACHED_PASSWORD_FILE)" >> $db
+    #
+    # where a failed `cat` inside a command substitution yields an empty string
+    # without tripping `set -e`. memcached then starts, healthy, with an empty
+    # password, and the only symptom is Zulip dying minutes later on
+    # "MemcachedException: Auth failure" in a traceback that names neither
+    # memcached's permissions nor this file.
+    #
+    # secrets/ stays 0700, so nothing on the host gains access; only the daemon,
+    # which is root, reads through it to make the mount. Applied on every run
+    # rather than at creation, so an install that already has the broken mode is
+    # repaired by `generate` rather than needing to know this.
+    #
+    # Never seen on Windows: Docker Desktop's filesystem layer does not present
+    # these modes, so every bind-mounted file is readable by everyone in the
+    # container regardless of what it says here.
+    chmod 644 secrets/memcached_password
     ok "secrets present"
 
     # nginx's allow-list in front of the internal hook, which has to name the
