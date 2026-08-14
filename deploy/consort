@@ -482,6 +482,14 @@ cmd_up() {
         local files
         files=$(env_get COMPOSE_FILE)
         export COMPOSE_FILE="${files}:build.yaml"
+
+        # Compose 5 hands builds to bake, which resolves every build context as
+        # a local path before deciding whether it is one. The Zulip service
+        # builds from a git URL, so on Windows that becomes a stat of
+        # `deploy\https:` and the build dies naming a path nobody wrote. The
+        # classic builder handles a remote context correctly, so ask for it.
+        export COMPOSE_BAKE=false
+
         step "Building images (Zulip is 20-45 minutes the first time; the rest are quick)"
         compose build
     else
