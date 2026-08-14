@@ -17,6 +17,19 @@
 	# otherwise listen on 2019 inside the container.
 	admin off
 
+	servers {
+		# Which peers Caddy will believe X-Forwarded-* from. It *overwrites*
+		# those headers for anyone not on this list, so behind another proxy an
+		# empty list means Zulip is told the request arrived over plain HTTP
+		# from the proxy's own address: every generated URL comes out wrong, and
+		# every rate limit and audit line names the proxy rather than the
+		# visitor.
+		#
+		# Loopback by default — trust nothing — which is correct whenever Caddy
+		# is itself the front door. traefik.yaml sets it to Traefik's subnet.
+		trusted_proxies static {$CADDY_TRUSTED_PROXIES:127.0.0.1/32}
+	}
+
 	# Certificates from Caddy's own CA, generated on first start and kept in the
 	# caddy-data volume. Browsers will not trust that CA until it is imported —
 	# `consort trust` prints how — and until then the meet iframe fails
@@ -29,11 +42,17 @@
 	local_certs
 }
 
-{$ZULIP_HOST}:{$INGRESS_PORT} {
+# Each origin answers on two listeners: TLS on the published port, and plain
+# HTTP on an unpublished one for a reverse proxy that has already terminated TLS
+# (see traefik.yaml). Both are always defined. The HTTP one is unreachable
+# unless something is put in front of it — nothing publishes that port — and
+# keeping it here means there is one Caddyfile rather than a local one and a
+# production one that drift.
+{$ZULIP_HOST}:{$INGRESS_PORT}, http://{$ZULIP_HOST}:{$CADDY_PROXY_PORT:8080} {
 	reverse_proxy zulip:80
 }
 
-{$MEET_HOST}:{$INGRESS_PORT} {
+{$MEET_HOST}:{$INGRESS_PORT}, http://{$MEET_HOST}:{$CADDY_PROXY_PORT:8080} {
 	# The web container serves plain HTTP on 8000 (DISABLE_HTTPS=1 in .env stops
 	# it redirecting to a port that is not published). WebSocket upgrades for the
 	# XMPP transport pass through reverse_proxy untouched.

@@ -1,0 +1,105 @@
+---
+# Serve both origins through a Traefik that already runs on this host.
+#
+# WHY Caddy stays: it is not doing TLS or hostname routing for its own sake —
+# it is the one place that knows Zulip is on :80 and the Jitsi web app is on
+# :8000, and that the two must share a port so they share a cookie jar. Traefik
+# terminates TLS and hands both names to it; Caddy does the split. The stack
+# below the ingress is byte-for-byte what it is on a laptop, which is the point:
+# one topology, not two.
+#
+# USE, on the host with Traefik:
+#   COMPOSE_FILE=base.yaml:vendor/...:overlay.yaml:traefik.yaml   in .env
+#   TRAEFIK_NETWORK / TRAEFIK_SUBNET / ZULIP_HOST / MEET_HOST set beside it
+#
+# Take it back out of the merge and the deployment is a local one again, with no
+# leftover state: every value here is an override of something overlay.yaml
+# already sets.
+
+services:
+  # Traefik reaches Caddy over the network it already shares with everything
+  # else it fronts, on plain HTTP. The published :8443 listener is deliberately
+  # left in place beside it — `consort verify` and `wait_for_zulip` reach the
+  # stack through it without needing DNS, a certificate, or Traefik to be up.
+  caddy:
+    environment:
+      # Consumed by caddy/Caddyfile. The HTTP listener exists in every profile;
+      # what this file adds is something in front of it.
+      CADDY_PROXY_PORT: ${CADDY_PROXY_PORT:-8080}
+      # Caddy overwrites X-Forwarded-* unless the peer is trusted, which behind
+      # another proxy means telling Zulip the request arrived over plain HTTP
+      # from Traefik's address. Required rather than defaulted: a wrong subnet
+      # here is a silent downgrade, not an error.
+      CADDY_TRUSTED_PROXIES: ${TRAEFIK_SUBNET:?TRAEFIK_SUBNET is required when traefik.yaml is in the merge}
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      # Caddy is on three networks and Traefik picks among them arbitrarily
+      # without being told. The wrong choice is one it cannot reach, for a 502
+      # that appears and disappears with container restarts.
+      - "traefik.docker.network=${TRAEFIK_NETWORK:?TRAEFIK_NETWORK is required when traefik.yaml is in the merge}"
+
+      # Two routers, one service: the routing *between* the origins stays in the
+      # Caddyfile, so there is a single place where "which name is which
+      # backend" is written down.
+      - "traefik.http.routers.consort-zulip.rule=Host(`${ZULIP_HOST}`)"
+      - "traefik.http.routers.consort-zulip.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.consort-zulip.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.consort-zulip.service=consort"
+
+      - "traefik.http.routers.consort-meet.rule=Host(`${MEET_HOST}`)"
+      - "traefik.http.routers.consort-meet.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.consort-meet.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.consort-meet.service=consort"
+
+      # No tls.domains here on purpose. Traefik serves a certificate it already
+      # holds if one matches the name, so a wildcard obtained elsewhere is used
+      # as it stands; only if there is none does the resolver go and ask for
+      # these two names specifically. Naming the wildcard would make this file
+      # the thing that orders it, which is not its job.
+      - "traefik.http.services.consort.loadbalancer.server.port=${CADDY_PROXY_PORT:-8080}"
+
+  # Everything below is the same correction in four places: the public origin no
+  # longer carries a port. overlay.yaml builds all of these as HOST:INGRESS_PORT
+  # because on a laptop that is the truth; behind Traefik on 443 it is not, and
+  # a stale ":8443" here does not fail — it produces links to a port nothing is
+  # listening on, and a Jitsi iframe whose origin does not match PUBLIC_URL.
+  zulip:
+    environment:
+      SETTING_EXTERNAL_HOST: ${ZULIP_HOST}
+      SETTING_JITSI_SERVER_URL: https://${MEET_HOST}
+      # Both proxies, so nginx walks the X-Forwarded-For chain past Traefik and
+      # Caddy to the address that actually made the request. EDGE_SUBNET has to
+      # stay: it is also how the conferencing service is allowed to call the
+      # internal hook. The traefik subnet is added here and NOT to
+      # zulip/jitsi-hook.conf.template, which is what finally makes that file's
+      # claim true — the hook is reachable from the internal network and not
+      # from the ingress.
+      LOADBALANCER_IPS: ${EDGE_SUBNET:-10.87.0.0/24},${TRAEFIK_SUBNET}
+
+  conferencing:
+    environment:
+      ZULIP_SITE: https://${ZULIP_HOST}
+
+  # Upstream hands PUBLIC_URL to both of these, and it is set once in .env, so
+  # overriding it on `web` alone would leave prosody quietly building URLs for
+  # the laptop's origin. Derived from MEET_HOST in both places here, which makes
+  # the PUBLIC_URL line in .env dead under this overlay rather than a third copy
+  # to keep in step.
+  web:
+    environment:
+      PUBLIC_URL: https://${MEET_HOST}
+
+  prosody:
+    environment:
+      PUBLIC_URL: https://${MEET_HOST}
+
+networks:
+  # Traefik's own network, created by whatever brought Traefik up. External
+  # because this stack must not own it: `consort destroy` removes what it
+  # created, and taking the host's ingress network with it would be a poor way
+  # to find that out.
+  traefik:
+    name: ${TRAEFIK_NETWORK:?TRAEFIK_NETWORK is required when traefik.yaml is in the merge}
+    external: true

@@ -109,6 +109,32 @@ authority, and `JVB_ADVERTISE_IPS=127.0.0.1`. For a deployment others can reach,
 4. Consider `call_door_policy` on web-public channels: the default, `anarchy`, lets an anonymous
    visitor hold a call alone in your organization's channel. `authenticated_user` is usually right.
 
+### Behind a Traefik that already exists
+
+Add `traefik.yaml` to `COMPOSE_FILE` and fill in the `TRAEFIK_*` block in `.env`. Caddy stays in
+the path — it is the only place that knows Zulip is on `:80`, the Jitsi web app is on `:8000`, and
+that both must share a port so they share a cookie jar. Traefik terminates TLS and hands it both
+names; Caddy does the split, exactly as it does on a laptop.
+
+What the overlay changes, and why each one is not optional:
+
+| | |
+|---|---|
+| Caddy joins Traefik's network | Traefik cannot route to a container it shares no network with. `traefik.docker.network` is set too, because Caddy is on three and Traefik picks among them arbitrarily otherwise — for a 502 that comes and goes with restarts. |
+| A plain-HTTP listener on `CADDY_PROXY_PORT` | Nothing publishes it, so it is reachable only through Traefik. The TLS listener on `INGRESS_PORT` stays, which is how `verify` and the first-boot wait keep working without DNS or a certificate. |
+| `trusted_proxies` in the Caddyfile | Caddy *overwrites* `X-Forwarded-*` for any peer not on that list, so without it Zulip is told every request arrived over plain HTTP from Traefik's address. |
+| The port comes out of the public origins | `SETTING_EXTERNAL_HOST`, `PUBLIC_URL`, `ZULIP_SITE` and `SETTING_JITSI_SERVER_URL` are built as `HOST:INGRESS_PORT`, which is true on a laptop and not behind Traefik on 443. Left alone it does not fail — it generates links to a port nothing serves, and a Jitsi iframe whose origin does not match `PUBLIC_URL`. |
+| `LOADBALANCER_IPS` gains Traefik's subnet | So nginx walks the `X-Forwarded-For` chain past *both* proxies to the real client. `EDGE_SUBNET` stays, because it is also how the conferencing service is allowed to call the internal hook. |
+
+That last row is the one worth understanding. Traefik's subnet is added to `LOADBALANCER_IPS` and
+deliberately **not** to `zulip/jitsi-hook.conf.template`, which is what finally makes that file's
+claim true: `/api/internal/jitsi/` is reachable from the internal network and not from the ingress.
+Until something sat in front of Caddy, Caddy was itself on `edge`, so a public request to that path
+arrived from an allowed address and only the bearer secret stood in the way.
+
+Media is not affected by any of this. JVB is UDP straight from the browser, does not pass through
+Traefik, and still needs `JVB_ADVERTISE_IPS` and an open `JVB_PORT`.
+
 ## What `verify` asserts, and why those things
 
 Everything it checks fails *silently*. A stack with all eleven containers running and every one of
