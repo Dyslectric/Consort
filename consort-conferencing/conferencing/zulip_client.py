@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_TIMEOUT_SECONDS = 90.0
 
+# How often to repeat that Zulip is still unreachable. Long, because the point
+# is to bound the noise of a cold start; short enough that an outage lasting
+# hours is not represented by a single line at the top of the log.
+UNAVAILABLE_REPORT_SECONDS = 60.0
+
 
 class ZulipError(RuntimeError):
     pass
@@ -43,6 +48,23 @@ class ZulipError(RuntimeError):
 
 class BadEventQueueId(ZulipError):
     """The queue we were polling no longer exists."""
+
+
+class ZulipUnavailable(ZulipError):
+    """Zulip is not answering yet. Expected, not exceptional.
+
+    This service and Zulip start together, and Zulip's first boot runs every
+    migration against an empty database — minutes during which the loop cannot
+    do anything but wait. Separating that from a real error is what lets the
+    loop be quiet about the former without being quiet about the latter.
+    """
+
+
+# A gateway saying it has no upstream, rather than Zulip saying anything. The
+# reply is HTML from nginx or Caddy, so it fails to parse as JSON long before
+# its status code is looked at — which is why this is a check on the status and
+# not on the body. 500 is deliberately absent: that is Zulip answering, badly.
+UNAVAILABLE_STATUSES = frozenset({502, 503, 504})
 
 
 class ZulipClient:
@@ -73,6 +95,10 @@ class ZulipClient:
         try:
             body = response.json()
         except ValueError:
+            if response.status_code in UNAVAILABLE_STATUSES:
+                raise ZulipUnavailable(
+                    f"{method} {path}: {response.status_code} from the proxy in front of Zulip"
+                ) from None
             raise ZulipError(f"{method} {path} returned non-JSON ({response.status_code})")
         if body.get("result") != "success":
             if body.get("code") == "BAD_EVENT_QUEUE_ID":
@@ -211,10 +237,42 @@ class EventLoop:
         return dispatched
 
     def run_forever(self) -> None:
+        # Waiting for Zulip is the normal first minutes of this service's life:
+        # the two start together and Zulip's first boot migrates an empty
+        # database. Logging a traceback every `backoff_seconds` through that is
+        # not a report, it is a wall of text that trains people to ignore the
+        # log — which matters precisely because a *real* error appears in the
+        # same place and looks the same.
+        #
+        # So: say it once, then stay quiet, then say it again on a slow timer so
+        # a genuine outage cannot pass for a slow boot, and say when it ends.
+        # Anything that is not an unreachable Zulip still gets its traceback.
+        unavailable_since: float | None = None
+        next_report: float = 0.0
+
         while not self._stop.is_set():
             try:
                 self.run_once()
+            except (ZulipUnavailable, requests.ConnectionError, requests.Timeout) as exc:
+                now = self.clock()
+                if unavailable_since is None:
+                    unavailable_since = now
+                    next_report = now + UNAVAILABLE_REPORT_SECONDS
+                    logger.info("Zulip is not answering yet (%s); waiting", exc)
+                elif now >= next_report:
+                    next_report = now + UNAVAILABLE_REPORT_SECONDS
+                    logger.warning(
+                        "Zulip has not answered for %.0fs (%s)", now - unavailable_since, exc
+                    )
+                self.queue_id = None
+                self.sleep(self.backoff_seconds)
+                continue
             except (ZulipError, requests.RequestException):
                 logger.exception("event loop error; backing off")
                 self.queue_id = None
                 self.sleep(self.backoff_seconds)
+                continue
+
+            if unavailable_since is not None:
+                logger.info("Zulip answered after %.0fs", self.clock() - unavailable_since)
+                unavailable_since = None

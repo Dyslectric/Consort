@@ -4,13 +4,21 @@ Both are about the same thing: noticing when we have stopped knowing what is
 happening, rather than carrying on confidently.
 """
 
+import logging
+
 import pytest
 import requests
 
 from conferencing.census import Census
 from conferencing.render import call_message, roster_line
 from conferencing.state import Call, CallState, Occupant, Store
-from conferencing.zulip_client import BadEventQueueId, EventLoop, ZulipClient, ZulipError
+from conferencing.zulip_client import (
+    BadEventQueueId,
+    EventLoop,
+    ZulipClient,
+    ZulipError,
+    ZulipUnavailable,
+)
 
 
 class FakeClient:
@@ -94,6 +102,73 @@ class TestEventLoop:
         # Reconnecting without reconciling is the quiet failure: no error, and
         # simply wrong about everything that happened during the gap.
         assert reconciled == [1, 1]
+
+    def _scripted_loop(self, outcomes, ticks):
+        """A loop whose every pass is scripted: an exception, or None to succeed.
+
+        The clock is scripted too, so the reporting interval can be crossed
+        without the test spending a minute doing it.
+        """
+        remaining = list(outcomes)
+        clock_ticks = list(ticks)
+        loop = EventLoop(
+            FakeClient([]),
+            lambda e: None,
+            backoff_seconds=0,
+            clock=lambda: clock_ticks.pop(0) if clock_ticks else 9999.0,
+            sleep=lambda _s: None,
+        )
+
+        def scripted():
+            if not remaining:
+                loop.stop()
+                return 0
+            outcome = remaining.pop(0)
+            if outcome is not None:
+                raise outcome
+            return 0
+
+        loop.run_once = scripted
+        return loop
+
+    def test_an_unreachable_zulip_is_reported_once_then_on_a_slow_timer(self, caplog):
+        """A cold start is minutes of 502s while Zulip migrates an empty
+        database. One line, then quiet — but a warning on a slow timer, so a
+        real outage cannot pass for a slow boot by staying silent."""
+        down = ZulipUnavailable("POST /register: 502 from the proxy in front of Zulip")
+        loop = self._scripted_loop(
+            [down, down, down, None],
+            #  t=0 first  t=1 inside  t=61 past  t=62 recovered
+            [0.0, 1.0, 61.0, 62.0],
+        )
+
+        caplog.set_level(logging.INFO)
+        loop.run_forever()
+
+        messages = [(r.levelno, r.getMessage()) for r in caplog.records]
+        assert sum("not answering yet" in m for _, m in messages) == 1
+        assert sum(
+            lvl == logging.WARNING and "has not answered for 61s" in m for lvl, m in messages
+        ) == 1
+        assert any("Zulip answered after 62s" in m for _, m in messages)
+        # The whole point: an expected condition produces no traceback.
+        assert not any(r.exc_info for r in caplog.records)
+
+    def test_a_dropped_connection_counts_as_unavailable_too(self, caplog):
+        """Before anything is listening it is a refused connection rather than a
+        502; the loop must not tell those apart."""
+        loop = self._scripted_loop([requests.ConnectionError("refused"), None], [0.0, 3.0])
+        caplog.set_level(logging.INFO)
+        loop.run_forever()
+        assert not any(r.exc_info for r in caplog.records)
+        assert any("not answering yet" in r.getMessage() for r in caplog.records)
+
+    def test_a_real_error_still_gets_its_traceback(self, caplog):
+        """The quiet path must not swallow the case it was carved out of."""
+        loop = self._scripted_loop([ZulipError("POST /register returned non-JSON (418)")], [0.0])
+        caplog.set_level(logging.INFO)
+        loop.run_forever()
+        assert any(r.exc_info for r in caplog.records)
 
     def test_a_failing_handler_does_not_stop_the_loop(self):
         def explode(event):
