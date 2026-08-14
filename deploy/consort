@@ -302,7 +302,7 @@ saml_parse_metadata() {
         # No `use` at all means the key is valid for both signing and
         # encryption, which is a signing key for our purposes.
         tag ~ /^[A-Za-z0-9_.-]*:?KeyDescriptor[ >]/ {
-            if (idp) { u = attr(tag, "use"); key = (u == "" || u == "signing") }
+            if (idp) { keyseen = 1; u = attr(tag, "use"); key = (u == "" || u == "signing") }
         }
         tag ~ /^\/[A-Za-z0-9_.-]*:?KeyDescriptor[ >]/ { key = 0 }
 
@@ -326,6 +326,7 @@ saml_parse_metadata() {
 
         END {
             printf "idp_descriptor=%d\n", seen
+            printf "key_descriptor=%d\n", keyseen
             printf "entity_id=%s\n", entity
             printf "url=%s\n", sso
             printf "cert=%s\n", cert
@@ -417,8 +418,25 @@ saml_fetch() {
 
     saml_require_url "$profile" "$entity" "entity ID"
     saml_require_url "$profile" "$sso" "single sign-on URL"
+
+    # An IdP with no KeyDescriptor at all is not a parsing problem, it is an IdP
+    # that has been given no signing certificate — so it is not signing its
+    # assertions either, and there is nothing to configure on this side that
+    # would make Zulip accept them. Worth its own message, because "no usable
+    # certificate" reads like something went wrong here rather than something
+    # that was never set over there.
+    if [ "$(printf '%s\n' "$parsed" | sed -n 's/^key_descriptor=//p')" = "0" ]; then
+        die "the IdP at $url publishes no signing key at all.
+       Its metadata has no KeyDescriptor, which means the provider has no
+       signing certificate set — so it is not signing assertions, and Zulip
+       verifies every one of them. In authentik: Applications -> Providers ->
+       your SAML provider -> Advanced protocol settings -> Signing Certificate.
+       Any keypair will do; the built-in self-signed one is fine."
+    fi
     printf '%s' "$cert" | grep -Eq '^[A-Za-z0-9+/=]+$' \
-        || die "no usable signing certificate in the metadata at $url."
+        || die "the signing certificate published at $url could not be read.
+       There is a KeyDescriptor, but no X509Certificate under it this can use.
+       What was served has been left in $raw."
 
     # PEM rather than the bare base64 the document carries. python3-saml accepts
     # either, and this way the file can be read by every certificate tool an
