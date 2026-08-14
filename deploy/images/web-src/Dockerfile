@@ -33,7 +33,15 @@ ARG JM_REF=master
 
 FROM ${JITSI_IMAGE_REPO}/web:${JITSI_IMAGE_VERSION} AS base
 
-FROM node:${NODE_VERSION}-bookworm AS build
+# --platform=$BUILDPLATFORM pins the compile to the machine doing the building,
+# never to the architecture being built for. What comes out of it is JavaScript,
+# CSS and sounds — the same bytes whatever runs them — so compiling it once per
+# target architecture buys nothing at all, and buys it at the price of running
+# webpack under QEMU, which turns ten minutes into most of an afternoon. The
+# per-architecture part of this image is the `base` layer above, which upstream
+# already publishes for both. Remove this and a multi-arch build looks like it
+# has hung.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm AS build
 ARG LJM_REPO
 ARG LJM_REF
 ARG JM_REPO

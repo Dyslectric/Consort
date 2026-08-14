@@ -1,18 +1,26 @@
 ---
-# Build and publish the four images the deployment pulls.
+# Build and publish the five images the deployment pulls.
 #
 # Three of them are thin and build in a couple of minutes, so they are built for
-# both architectures in one go under emulation. Zulip is not: it compiles the
-# server and its frontend from source, and under QEMU that turns 30 minutes into
-# most of a day. So it is built on a native runner per architecture and the two
-# results are stitched into one manifest afterwards — which is why that half of
-# this file is three jobs rather than one.
+# both architectures in one go under emulation. Two are not, and they are slow in
+# different ways, which is why each has its own job:
+#
+#   consort-web compiles the Jitsi app from the fork. What it produces is
+#   JavaScript, so it compiles ONCE on the build machine and upstream's own
+#   multi-arch image supplies the per-architecture half.
+#
+#   consort-server compiles Zulip, whose output is not architecture-independent.
+#   Under QEMU that turns 30 minutes into most of a day, so it is built on a
+#   native runner per architecture and stitched into one manifest afterwards.
 #
 # AFTER THE FIRST SUCCESSFUL RUN: GHCR creates new packages as *private*, even
 # from a public repository, and a private package is exactly as useless to a
-# stranger as no package at all. For each of the four, open its page under the
+# stranger as no package at all. For each of the five, open its page under the
 # org's Packages tab -> Package settings -> change visibility to Public, and
 # connect it to this repository while you are there.
+#
+# consort-web-upstream is new as of the switch to a compiled app, so it needs
+# that treatment even though the others already have it.
 
 name: images
 
@@ -28,6 +36,12 @@ on:
       jitsi_image_version:
         description: "Upstream Jitsi image tag to layer on"
         default: unstable-2026-06-25
+      jitsi_meet_ref:
+        description: "Ref of the jitsi-meet fork to compile"
+        default: consort-screenshare-audio
+      lib_jitsi_meet_ref:
+        description: "Ref of the lib-jitsi-meet fork to compile"
+        default: consort-screenshare-audio
 
 env:
   # Must agree with JITSI_IMAGE_VERSION in deploy/.env.example: prosody and web
@@ -37,6 +51,18 @@ env:
   JITSI_IMAGE_VERSION: ${{ inputs.jitsi_image_version || 'unstable-2026-06-25' }}
   ZULIP_GIT_URL: https://github.com/Dyslectric/zulip-meet-integration
   ZULIP_GIT_REF: ${{ inputs.zulip_git_ref || 'lounges' }}
+  # The Jitsi fork the web app is compiled from. HTTPS rather than the SSH
+  # remotes these are cloned with locally: the build clones unauthenticated, so
+  # both repositories have to stay public.
+  #
+  # A branch, not a commit, which the Dockerfile's own comment argues against —
+  # and it is right, the image does change under you between builds. Living with
+  # it here because the fork moves daily; pin these to commits at the point the
+  # audio work settles.
+  LJM_REPO: https://github.com/Dyslectric/lib-jitsi-meet.git
+  LJM_REF: ${{ inputs.lib_jitsi_meet_ref || 'consort-screenshare-audio' }}
+  JM_REPO: https://github.com/Dyslectric/jitsi-meet.git
+  JM_REF: ${{ inputs.jitsi_meet_ref || 'consort-screenshare-audio' }}
   # The build context for docker-zulip's own Dockerfile, pinned to the same tag
   # as deploy/vendor/docker-zulip/compose.yaml so the image and the compose file
   # that runs it come from one release.
@@ -65,7 +91,11 @@ jobs:
           - name: prosody
             context: .
             dockerfile: deploy/images/prosody/Dockerfile
-          - name: web
+          # The published Jitsi app with the relay layered on: seconds to build,
+          # and no longer what the deployment runs by default. It stays because
+          # it is the fallback — CONSORT_WEB_IMAGE in .env swaps it back in
+          # without a rebuild when a source build misbehaves in the stack.
+          - name: web-upstream
             context: .
             dockerfile: deploy/images/web/Dockerfile
     steps:
@@ -106,6 +136,68 @@ jobs:
             JITSI_IMAGE_VERSION=${{ env.JITSI_IMAGE_VERSION }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # ---------------------------------------------------------------------------
+  # The Jitsi web app, compiled from the fork
+  # ---------------------------------------------------------------------------
+  #
+  # Its own job rather than a fourth row in the matrix above, because it is not
+  # thin: two npm installs and a webpack build, around ten minutes against
+  # seconds for the others, and it wants its own cache scope and timeout.
+  #
+  # Not split across native runners the way Zulip is, either. What this compiles
+  # is JavaScript and CSS — architecture-independent — so the Dockerfile pins the
+  # compile stage to $BUILDPLATFORM and it runs once, natively, with upstream's
+  # own multi-arch image supplying the per-architecture half. One runner, one
+  # compile, a manifest for both.
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase the owner
+        id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.name }}/consort-web
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/images/web-src/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            JITSI_IMAGE_VERSION=${{ env.JITSI_IMAGE_VERSION }}
+            LJM_REPO=${{ env.LJM_REPO }}
+            LJM_REF=${{ env.LJM_REF }}
+            JM_REPO=${{ env.JM_REPO }}
+            JM_REF=${{ env.JM_REF }}
+          cache-from: type=gha,scope=web-src
+          cache-to: type=gha,mode=max,scope=web-src
 
   # ---------------------------------------------------------------------------
   # Zulip: one native runner per architecture, merged afterwards

@@ -39,22 +39,24 @@ services:
       args:
         JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
 
-  # Two Dockerfiles, one service. images/web layers a script onto the published
-  # app and takes seconds; images/web-src compiles the app from source, takes ten
-  # minutes, and is the only one that can carry a change to lib-jitsi-meet.
+  # Two Dockerfiles, one service. images/web-src compiles the app from the fork
+  # and takes ten minutes; images/web layers the relay onto the published app in
+  # seconds but cannot carry a change to lib-jitsi-meet.
   #
-  # Selected by variable rather than by editing this file, so a source build that
-  # misbehaves in the stack can be backed out with one env line rather than a
-  # commit. The four fork variables are read only by web-src; building the
-  # prebuilt path with them set draws an unused-build-arg warning from Docker and
-  # nothing worse.
+  # The defaults here match what CI publishes as consort-web, which is the whole
+  # premise of this file: a local build has to be the same artefact as the pull,
+  # or `up --build` becomes its own untested deployment. Both are selected by
+  # variable rather than by editing this file, so a source build that misbehaves
+  # in the stack is backed out with one env line — but back it out in BOTH
+  # places, because CONSORT_WEB_IMAGE decides what the tag means and
+  # JITSI_WEB_DOCKERFILE decides what goes into it.
   web:
     build:
       context: ..
-      dockerfile: ${JITSI_WEB_DOCKERFILE:-deploy/images/web/Dockerfile}
+      dockerfile: ${JITSI_WEB_DOCKERFILE:-deploy/images/web-src/Dockerfile}
       args:
         JITSI_IMAGE_VERSION: ${JITSI_IMAGE_VERSION:-unstable-2026-06-25}
-        LJM_REPO: ${LJM_REPO:-https://github.com/jitsi/lib-jitsi-meet.git}
-        LJM_REF: ${LJM_REF:-master}
-        JM_REPO: ${JM_REPO:-https://github.com/jitsi/jitsi-meet.git}
-        JM_REF: ${JM_REF:-master}
+        LJM_REPO: ${LJM_REPO:-https://github.com/Dyslectric/lib-jitsi-meet.git}
+        LJM_REF: ${LJM_REF:-consort-screenshare-audio}
+        JM_REPO: ${JM_REPO:-https://github.com/Dyslectric/jitsi-meet.git}
+        JM_REF: ${JM_REF:-consort-screenshare-audio}

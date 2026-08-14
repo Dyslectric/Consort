@@ -198,10 +198,20 @@ services:
   # ---------------------------------------------------------------------------
 
   web:
-    # Custom image: the stock one plus jitsi-speaking-relay.js, which is the only
-    # place per-participant audio levels exist (the External API exposes just the
-    # single dominant speaker).
-    image: ghcr.io/dyslectric/consort-web:${CONSORT_VERSION:-latest}
+    # The Jitsi app compiled from this project's fork, plus
+    # jitsi-speaking-relay.js — the only place per-participant audio levels exist,
+    # since the External API exposes just the single dominant speaker.
+    #
+    # Compiled rather than layered because the audio work is not reachable in a
+    # built bundle: screen share audio as its own track changes lib-jitsi-meet,
+    # and enableAdvancedAudioSettings — without which every control in the audio
+    # menu stores a preference nothing consults — is appended to the config
+    # template by that image and not by the prebuilt one.
+    #
+    # CONSORT_WEB_IMAGE is the way back. Point it at consort-web-upstream and the
+    # stack runs the published Jitsi app with only the relay added, which is a
+    # pull rather than a rebuild — worth having while the fork moves.
+    image: ${CONSORT_WEB_IMAGE:-ghcr.io/dyslectric/consort-web}:${CONSORT_VERSION:-latest}
     # Upstream publishes ${HTTP_PORT}:8000 and ${HTTPS_PORT}:8443 on the host.
     # Caddy reaches it as `web:8000` over the docker network instead.
     ports: !reset null
