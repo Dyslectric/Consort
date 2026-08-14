@@ -51,6 +51,14 @@ env_get() {
     sed -n "s/^$1=//p" .env | tail -n 1
 }
 
+# The same, for the key=value files under saml/ and the ones rendered into
+# generated/saml/. Same reasoning: they are data, and sourcing them would run
+# whatever a stray backtick happened to spell.
+conf_get() {
+    [ -f "$1" ] || return 0
+    sed -n "s/^$2=//p" "$1" | tail -n 1
+}
+
 # Rewrite one value in place, adding it if absent. Used by bootstrap to record
 # the bot's credentials, which cannot exist until Zulip has booted.
 env_set() {
@@ -196,6 +204,454 @@ cmd_preflight() {
 }
 
 # ---------------------------------------------------------------------------
+# SAML
+# ---------------------------------------------------------------------------
+#
+# A SAML configuration has three parts and they do not come from the same place.
+# Treating them as one bag of settings to be typed into .env is how a signing
+# certificate ends up in secrets/ and an SP key ends up shared between machines.
+#
+#   The IdP half — entity ID, SSO URL, signing certificate — is *published*.
+#   Authentik serves it as a metadata document at a URL, so it is fetched here
+#   and rendered into generated/saml/ rather than transcribed. None of it is
+#   secret: a signing certificate is a public key, which is the whole reason it
+#   can be published at a URL in the first place.
+#
+#   The SP half is this deployment's own and is never pulled from anywhere.
+#   Zulip derives SOCIAL_AUTH_SAML_SP_ENTITY_ID from its own EXTERNAL_HOST, and
+#   the optional keypair it signs requests with is read from
+#   /etc/zulip/saml/zulip-cert.crt inside the container. There is nothing in a
+#   preview environment that could correctly supply either.
+#
+#   The attribute mapping is neither. It is an agreement made identically on
+#   both sides, it is the same wherever you point, and it lives in
+#   saml/mapping.conf under version control.
+#
+# All of it is off unless SAML_PROFILES names a profile, because `up` from
+# nothing on a machine that can reach none of this has to keep working — that
+# path is the deploy's main value and no amount of SSO is worth breaking it.
+
+saml_active_profiles() {
+    printf '%s' "$(env_get SAML_PROFILES)" | tr ',' ' '
+}
+
+# The committed profile is the default and .env overrides it, so an environment
+# worth sharing is a one-line diff and an environment nobody else needs is a
+# line in a file that is never committed.
+saml_metadata_url() {
+    local override
+    override=$(env_get "SAML_METADATA_URL_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')")
+    if [ -n "$override" ]; then
+        printf '%s' "$override"
+        return 0
+    fi
+    conf_get "saml/profiles/$1.env" METADATA_URL
+}
+
+# Pull the three published values out of a SAML metadata document.
+#
+# Done in awk rather than with an XML parser because there is no XML parser this
+# script can assume: Git Bash has no python and no xmllint, and pulling an image
+# to parse a 4 KB document would put a container between `generate` and the one
+# thing it has to be able to do offline. What makes that defensible is that
+# every value taken here is checked afterwards, and anything unexpected stops
+# the run rather than being rendered into Zulip's settings.
+saml_parse_metadata() {
+    # RS="<" splits on tag boundaries, which is the only structure this needs —
+    # and it avoids `sed 's/</\n</g'`, whose \n in the replacement is a GNU
+    # extension that BSD sed on macOS does not accept.
+    awk '
+        BEGIN { RS = "<" }
+
+        # Attribute values, matched together with the space that separates them
+        # from the tag name or the previous attribute, so that a search for
+        # `use="` cannot land inside a longer attribute name that ends in "use".
+        function attr(tag, name,    marker, at, rest) {
+            marker = " " name "=\""
+            at = index(tag, marker)
+            if (at == 0) return ""
+            rest = substr(tag, at + length(marker))
+            at = index(rest, "\"")
+            if (at == 0) return ""
+            return substr(rest, 1, at - 1)
+        }
+
+        {
+            # Newlines are insignificant in XML and authentik wraps long
+            # attribute lists, so each tag is flattened before matching. They
+            # become spaces rather than disappearing: deleting them would fuse
+            # `foo` and `bar="x"` across a wrap into one meaningless token.
+            tag = $0
+            gsub(/[\r\n]/, " ", tag)
+        }
+
+        # The optional `prefix:` is spelled out on every tag because the prefix
+        # is the document author'"'"'s choice, not part of the format: authentik
+        # writes md:, other IdPs write ns0: or nothing at all.
+        tag ~ /^[A-Za-z0-9_.-]*:?EntityDescriptor[ >]/ {
+            if (entity == "") entity = attr(tag, "entityID")
+        }
+
+        # Everything below is read only from inside the IdP descriptor. A
+        # metadata document can describe a service provider too, and taking a
+        # certificate from the wrong descriptor would produce a configuration
+        # that looks complete and rejects every assertion.
+        tag ~ /^[A-Za-z0-9_.-]*:?IDPSSODescriptor[ >]/  { idp = 1; seen = 1 }
+        tag ~ /^\/[A-Za-z0-9_.-]*:?IDPSSODescriptor[ >]/ { idp = 0 }
+
+        # No `use` at all means the key is valid for both signing and
+        # encryption, which is a signing key for our purposes.
+        tag ~ /^[A-Za-z0-9_.-]*:?KeyDescriptor[ >]/ {
+            if (idp) { u = attr(tag, "use"); key = (u == "" || u == "signing") }
+        }
+        tag ~ /^\/[A-Za-z0-9_.-]*:?KeyDescriptor[ >]/ { key = 0 }
+
+        # Zulip takes a single x509cert, so if a rotation ever publishes two
+        # signing keys only the first is used and the changeover needs a
+        # `generate` run on the right side of it.
+        tag ~ /^[A-Za-z0-9_.-]*:?X509Certificate>/ {
+            if (idp && key && cert == "") {
+                body = substr(tag, index(tag, ">") + 1)
+                gsub(/[ \t]/, "", body)
+                cert = body
+            }
+        }
+
+        # python-social-auth issues AuthnRequests over the redirect binding, so
+        # the POST endpoint an IdP also advertises is not interchangeable here.
+        tag ~ /^[A-Za-z0-9_.-]*:?SingleSignOnService[ >]/ {
+            if (idp && sso == "" && attr(tag, "Binding") ~ /HTTP-Redirect$/)
+                sso = attr(tag, "Location")
+        }
+
+        END {
+            printf "idp_descriptor=%d\n", seen
+            printf "entity_id=%s\n", entity
+            printf "url=%s\n", sso
+            printf "cert=%s\n", cert
+        }
+    ' "$1"
+}
+
+# Both URLs end up inside a Python literal that is itself one value of a compose
+# env_file line, and there is no quoting that survives both layers. A whitelist
+# rather than a blacklist: anything outside this set means something upstream is
+# wrong, and guessing at an escaping for it is how a settings file starts
+# executing something.
+saml_require_url() {
+    printf '%s' "$2" | grep -Eq '^https?://[A-Za-z0-9._~:/?#@!&+,;=%-]+$' \
+        || die "the $3 published for SAML profile '$1' is not a URL this can render safely:
+       ${2:-<empty>}"
+}
+
+# The same rule for the values that come from the committed files rather than
+# from the network. Those are reviewed, so this is a tripwire for a typo rather
+# than a defence — but a stray quote in a display name produces a settings.py
+# Zulip refuses to boot on, and the traceback says nothing about which file it
+# came from.
+saml_require_literal() {
+    if printf '%s' "$2" | grep -q '["\$]'; then
+        die "$1 in $3 cannot be rendered into Zulip's settings:
+         $2
+       A quote, backslash or dollar sign has no escaping that survives both the
+       Python literal and the env_file line it sits in."
+    fi
+}
+
+saml_fetch() {
+    local profile=$1
+    # The name becomes a Python dict key, a filename under /etc/zulip/saml/idps,
+    # part of a login URL, and the tail of an environment variable name. Those
+    # four do not agree on what a legal character is, so only take the ones they
+    # all accept.
+    printf '%s' "$profile" | grep -Eq '^[a-z0-9_]+$' \
+        || die "SAML profile name '$profile' is not usable; use lower-case letters, digits and underscores."
+
+    local url upper conf crt raw rc=0
+    url=$(saml_metadata_url "$profile")
+    upper=$(printf '%s' "$profile" | tr '[:lower:]' '[:upper:]')
+    conf="generated/saml/fetched/$profile.conf"
+    crt="generated/saml/idps/$profile.crt"
+    raw="generated/saml/fetched/$profile.xml.new"
+
+    [ -n "$url" ] || die "SAML profile '$profile' is enabled but has no metadata URL.
+       Set METADATA_URL in saml/profiles/$profile.env, or SAML_METADATA_URL_$upper in .env."
+
+    # -L because an IdP that requires authentication for its metadata answers
+    # with a redirect to a login page; following it turns a confusing transport
+    # failure into an obvious "this is not metadata" one below.
+    curl -fsSL --max-time 20 -o "$raw" "$url" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        rm -f "$raw"
+        if [ -s "$conf" ] && [ -s "$crt" ]; then
+            warn "could not fetch $url (curl exit $rc)"
+            say "      keeping the copy rendered at $(conf_get "$conf" fetched)"
+            return 0
+        fi
+        die "SAML profile '$profile' is enabled but its metadata could not be fetched
+       (curl exit $rc) from
+         $url
+       and nothing has been rendered before, so there is no last-known-good copy
+       to fall back to. Remove it from SAML_PROFILES in .env to bring the stack
+       up without SSO."
+    fi
+
+    local parsed entity sso cert
+    parsed=$(saml_parse_metadata "$raw")
+    entity=$(printf '%s\n' "$parsed" | sed -n 's/^entity_id=//p')
+    sso=$(printf '%s\n' "$parsed" | sed -n 's/^url=//p')
+    cert=$(printf '%s\n' "$parsed" | sed -n 's/^cert=//p')
+
+    # A fetch that succeeds and returns something else is a wrong URL, not an
+    # unreachable one, and the last-known-good copy is deliberately not used for
+    # it. The network is fine, so this is fixable now; carrying on against last
+    # week's IdP while the operator believes they have repointed it is the worse
+    # of the two failures.
+    [ "$(printf '%s\n' "$parsed" | sed -n 's/^idp_descriptor=//p')" = "1" ] \
+        || die "this is not identity-provider metadata; it has no IDPSSODescriptor:
+         $url
+       A service provider's own metadata (Zulip serves its own at
+       /saml/metadata.xml) will not do — this needs the IdP's. An HTML page
+       lands here too, which usually means the URL needs authentication.
+       What it actually served has been left in $raw."
+
+    saml_require_url "$profile" "$entity" "entity ID"
+    saml_require_url "$profile" "$sso" "single sign-on URL"
+    printf '%s' "$cert" | grep -Eq '^[A-Za-z0-9+/=]+$' \
+        || die "no usable signing certificate in the metadata at $url."
+
+    # PEM rather than the bare base64 the document carries. python3-saml accepts
+    # either, and this way the file can be read by every certificate tool an
+    # operator would reach for when the assertion signature is rejected.
+    {
+        printf -- '-----BEGIN CERTIFICATE-----\n'
+        printf '%s' "$cert" | fold -w 64
+        printf -- '\n-----END CERTIFICATE-----\n'
+    } >"$crt.new"
+
+    {
+        say "# Fetched by \`consort generate\`. Everything here is published by the IdP."
+        say "source=$url"
+        say "entity_id=$entity"
+        say "url=$sso"
+    } >"$conf.new"
+
+    # `fetched` is a timestamp, so it is written only when something else
+    # actually changed and is excluded from the comparison. Otherwise the second
+    # `generate` of a pair would rewrite both files with a new time and nothing
+    # else, which is exactly the kind of churn that makes "is this idempotent?"
+    # unanswerable by looking.
+    if [ -f "$conf" ] && [ -f "$crt" ] \
+        && cmp -s <(grep -v '^fetched=' "$conf") "$conf.new" \
+        && cmp -s "$crt" "$crt.new"; then
+        rm -f "$conf.new" "$crt.new" "$raw"
+        ok "SAML metadata for '$profile' is unchanged"
+        return 0
+    fi
+
+    printf 'fetched=%s\n' "$(date -u '+%Y-%m-%d %H:%M:%SZ')" >>"$conf.new"
+    mv "$conf.new" "$conf"
+    mv "$crt.new" "$crt"
+    rm -f "$raw"
+    ok "SAML metadata for '$profile' rendered from $url"
+}
+
+# A profile taken back out of SAML_PROFILES leaves its certificate behind in a
+# directory that is mounted into Zulip. Nothing reads it, but a stale
+# certificate for an IdP you thought you had turned off is the sort of thing
+# that costs an hour during an incident.
+saml_prune() {
+    local active=" $1 " path name
+    # *.xml.new is a document left behind for inspection by a fetch that
+    # returned something that was not metadata. It is caught by the same rule
+    # because `preview.xml` is not a profile name either.
+    for path in generated/saml/fetched/*.conf generated/saml/fetched/*.xml.new \
+        generated/saml/idps/*.crt; do
+        [ -e "$path" ] || continue
+        name=$(basename "$path"); name=${name%.*}
+        case "$active" in
+            *" $name "*) ;;
+            *) rm -f "$path" ;;
+        esac
+    done
+}
+
+# The extra attributes, minus the one that must not be there. See the comment on
+# extra_attrs in saml/mapping.conf: routing zulip_groups through this list makes
+# group sync silently work for one group per user.
+saml_extra_attrs() {
+    local item out="" IFS=,
+    local -a items
+    read -ra items <<<"$(conf_get saml/mapping.conf extra_attrs)"
+    for item in "${items[@]}"; do
+        [ -n "$item" ] || continue
+        if [ "$item" = "zulip_groups" ]; then
+            warn "ignoring zulip_groups in saml/mapping.conf extra_attrs; Zulip collects it itself."
+            continue
+        fi
+        out="$out${out:+, }\"$item\""
+    done
+    printf '%s' "$out"
+}
+
+# One entry of SOCIAL_AUTH_SAML_ENABLED_IDPS: the fetched half joined to the
+# committed half.
+saml_idp_entry() {
+    local profile=$1 conf=$2 out key value
+    out="\"$profile\": {\"entity_id\": \"$(conf_get "$conf" entity_id)\""
+    out="$out, \"url\": \"$(conf_get "$conf" url)\""
+
+    # x509cert_path is deliberately not set. Zulip reads
+    # /etc/zulip/saml/idps/<idp name>.crt on its own, which is exactly where
+    # overlay.yaml mounts the fetched certificate, so the profile name is the
+    # entire wiring between the two and there is no second place to keep in step.
+    for key in attr_user_permanent_id attr_username attr_email attr_full_name \
+        attr_first_name attr_last_name attr_org_membership; do
+        value=$(conf_get saml/mapping.conf "$key")
+        if [ -n "$value" ]; then
+            saml_require_literal "$key" "$value" saml/mapping.conf
+            out="$out, \"$key\": \"$value\""
+        fi
+    done
+
+    value=$(saml_extra_attrs)
+    if [ -n "$value" ]; then
+        out="$out, \"extra_attrs\": [$value]"
+    fi
+
+    case "$(conf_get saml/mapping.conf auto_signup)" in
+        true | True | 1 | yes) out="$out, \"auto_signup\": True" ;;
+    esac
+
+    # Falls back to the profile name rather than to Zulip's default, which is
+    # the bare string "SAML" — fine for one IdP and useless for three, and three
+    # is now possible.
+    value=$(conf_get "saml/profiles/$profile.env" DISPLAY_NAME)
+    saml_require_literal DISPLAY_NAME "$value" "saml/profiles/$profile.env"
+    out="$out, \"display_name\": \"${value:-$profile}\""
+
+    printf '%s}' "$out"
+}
+
+# SOCIAL_AUTH_SYNC_ATTRS_DICT, which is per-realm rather than per-IdP: one entry
+# covers every profile.
+saml_sync_attrs() {
+    local inner="" groups rendered item IFS=,
+    local -a items
+
+    if [ "$(conf_get saml/mapping.conf sync_full_name)" = "true" ]; then
+        inner='"full_name": True'
+    fi
+
+    groups=$(conf_get saml/mapping.conf groups)
+    if [ "$groups" = "*" ]; then
+        rendered='"*"'
+    elif [ -n "$groups" ]; then
+        rendered=""
+        read -ra items <<<"$groups"
+        for item in "${items[@]}"; do
+            [ -n "$item" ] || continue
+            # Group names reach a Python literal the same way the URLs do, and
+            # Authentik group names routinely contain spaces, so the set is
+            # wider than a URL's but still a whitelist.
+            printf '%s' "$item" | grep -Eq '^[A-Za-z0-9 ._:-]+$' \
+                || die "group '$item' in saml/mapping.conf cannot be rendered safely."
+            case "$item" in
+                *:*) rendered="$rendered${rendered:+, }(\"${item%%:*}\", \"${item#*:}\")" ;;
+                *) rendered="$rendered${rendered:+, }\"$item\"" ;;
+            esac
+        done
+        rendered="[$rendered]"
+    fi
+
+    if [ -n "${rendered:-}" ]; then
+        inner="$inner${inner:+, }\"groups\": $rendered"
+    fi
+    [ -n "$inner" ] || return 0
+
+    # The outer key is the realm's subdomain, and this install's realm is the
+    # one `consort bootstrap` makes with create_realm's default --string-id —
+    # which is the empty string, because the empty string *is* the root domain.
+    # So the key is "" and not the hostname. Get that wrong and nothing fails:
+    # attribute sync simply never happens.
+    printf '{"": {"saml": {%s}}}' "$inner"
+}
+
+saml_render() {
+    local profiles=$1 out=generated/saml/idps.env entries="" profile conf sync
+
+    for profile in $profiles; do
+        conf="generated/saml/fetched/$profile.conf"
+        # Missing only when the fetch failed and there was no copy to keep, and
+        # that path has already died. Skipping is for the impossible case.
+        [ -f "$conf" ] || continue
+        entries="$entries${entries:+, }$(saml_idp_entry "$profile" "$conf")"
+    done
+
+    {
+        say "# Rendered by \`consort generate\`; edits here are overwritten."
+        say "#"
+        say "# The IdP values come from metadata each IdP publishes (see"
+        say "# generated/saml/fetched/ for what was fetched and when); the attribute"
+        say "# mapping comes from saml/mapping.conf. Nothing in this file is secret."
+        if [ -z "$entries" ]; then
+            say "#"
+            say "# SAML is off: SAML_PROFILES in .env names nothing, so ZULIP_AUTH_BACKENDS"
+            say "# is left at the image's default of EmailAuthBackend."
+        else
+            say "SETTING_SOCIAL_AUTH_SAML_ENABLED_IDPS={$entries}"
+            # Not `sync=$(... || true)`: that would swallow the exit from a
+            # group name this cannot render, and rendering nothing at all is
+            # how attribute sync goes missing without a word about it.
+            sync=$(saml_sync_attrs)
+            if [ -n "$sync" ]; then
+                say "SETTING_SOCIAL_AUTH_SYNC_ATTRS_DICT=$sync"
+            fi
+            # EmailAuthBackend stays. The owner `consort bootstrap` created has a
+            # password and no Authentik identity, so dropping it locks you out of
+            # the organization the installer just made for you.
+            say "ZULIP_AUTH_BACKENDS=EmailAuthBackend,SAMLAuthBackend"
+        fi
+    } >"$out.new"
+
+    if cmp -s "$out.new" "$out" 2>/dev/null; then
+        rm -f "$out.new"
+    else
+        mv "$out.new" "$out"
+    fi
+
+    [ -n "$entries" ] || { ok "SAML is off (SAML_PROFILES is empty)"; return 0; }
+
+    local host port
+    host=$(env_get ZULIP_HOST); host=${host:-zulip.localhost}
+    port=$(env_get INGRESS_PORT); port=${port:-8443}
+    ok "rendered generated/saml/idps.env"
+    say ""
+    say "  ${DIM}The other direction is not published, so Authentik's Zulip application"
+    say "  needs these typed into it:${RESET}"
+    say "    ACS URL      ${BOLD}https://${host}:${port}/complete/saml/${RESET}"
+    say "    Entity ID    ${BOLD}https://${host}:${port}${RESET}"
+    say "    Metadata     ${BOLD}https://${host}:${port}/saml/metadata.xml${RESET} ${DIM}(once the stack is up)${RESET}"
+    say ""
+}
+
+saml_generate() {
+    mkdir -p generated/saml/idps generated/saml/fetched
+
+    local profiles profile
+    profiles=$(saml_active_profiles)
+    if [ -n "$profiles" ]; then
+        step "Fetching SAML metadata"
+        for profile in $profiles; do
+            saml_fetch "$profile"
+        done
+    fi
+
+    saml_prune "$profiles"
+    saml_render "$profiles"
+}
+
+# ---------------------------------------------------------------------------
 # generate
 # ---------------------------------------------------------------------------
 
@@ -244,6 +700,10 @@ cmd_generate() {
     subnet=$(env_get EDGE_SUBNET); subnet=${subnet:-10.87.0.0/24}
     sed "s|\${EDGE_SUBNET}|${subnet}|g" zulip/jitsi-hook.conf.template > generated/jitsi-hook.conf
     ok "rendered generated/jitsi-hook.conf for ${subnet}"
+
+    # Last, because it is the only step that touches the network, and everything
+    # above should already be on disk if it cannot.
+    saml_generate
 }
 
 # ---------------------------------------------------------------------------
@@ -412,6 +872,29 @@ cmd_verify() {
     local host port
     host=$(env_get ZULIP_HOST); host=${host:-zulip.localhost}
     port=$(env_get INGRESS_PORT); port=${port:-8443}
+
+    # SAML, when any is configured. /saml/metadata.xml is the one probe that
+    # covers both halves of a quiet failure: Zulip answers it with an ordinary
+    # HTML configuration-error page — status 200, so `curl -f` sees nothing
+    # wrong — when SAMLAuthBackend was never enabled, and with a 500 when
+    # python3-saml rejects the rendered settings. Either way the login page still
+    # shows a button, and the first person to learn it is broken is whoever
+    # clicks it.
+    if [ -n "$(env_get SAML_PROFILES)" ]; then
+        local ctype
+        ctype=$(curl -sk --resolve "${host}:${port}:127.0.0.1" -o /dev/null \
+            -w '%{content_type}' "https://${host}:${port}/saml/metadata.xml" || true)
+        case "$ctype" in
+            text/xml*) ok "SAML is enabled and Zulip is serving its SP metadata" ;;
+            *)
+                bad "SAML is configured but /saml/metadata.xml served '${ctype:-nothing}', not XML."
+                say "      Zulip has not enabled SAMLAuthBackend, or it rejected the rendered"
+                say "      settings. Try: ./consort logs zulip"
+                failed=1
+                ;;
+        esac
+    fi
+
     for h in "$host" "$(env_get MEET_HOST)"; do
         [ -n "$h" ] || continue
         if curl -skf --resolve "${h}:${port}:127.0.0.1" -o /dev/null "https://${h}:${port}/"; then

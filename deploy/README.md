@@ -65,6 +65,28 @@ structural rather than something you have to keep true by hand:
 Zulip's own secrets are files under `secrets/`, not environment variables, because an environment
 variable is visible in `docker inspect` to anything that can reach the daemon.
 
+### Single sign-on
+
+SAML against Authentik is off until `SAML_PROFILES` in `.env` names one of `saml/profiles/*.env`.
+Nothing about it is transcribed:
+
+| | |
+|---|---|
+| **Published, so fetched** | Entity ID, SSO URL and signing certificate come from the metadata document Authentik serves at `https://<host>/application/saml/<slug>/metadata/`. `generate` fetches it and renders `generated/saml/`. The certificate is not under `secrets/` — it is a public key, served at a URL to anyone who asks. |
+| **Local, so never fetched** | Zulip derives `SOCIAL_AUTH_SAML_SP_ENTITY_ID` from its own hostname, and reads the optional keypair it signs requests with from `/etc/zulip/saml/zulip-cert.crt` inside the container. There is nothing in another environment that could correctly supply either. |
+| **Agreed, so committed** | Which attribute is the email address, and which groups sync into Zulip user groups, is in `saml/mapping.conf`. Changing it is a commit, not a deployment step. |
+
+A profile file holds the metadata URL and the login button's label, and is meant to be committed so
+that pointing a machine at preview costs one word rather than three values out of someone else's
+browser. `SAML_METADATA_URL_<PROFILE>` in `.env` overrides it for an environment not worth sharing.
+More than one profile can be enabled at once; each becomes its own login button.
+
+If the fetch fails, `generate` keeps the copy it rendered last and says so — a laptop with no route
+to Authentik still brings the stack up. It only refuses when a profile is enabled, unreachable, and
+has never been rendered, because leaving SSO quietly switched off is worse than stopping. A fetch
+that *succeeds* and returns something else — an HTML login page, a service provider's metadata — is
+a wrong URL rather than an unreachable one, and stops the run without reaching for the old copy.
+
 `up` never overwrites an existing `.env` — it would take your secrets with it. So a setting added to
 `.env.example` after you installed does **not** appear in your `.env`, and a `git pull` followed by
 `up` will not pick it up. Copy the new line across by hand, then run `up` again:
@@ -101,6 +123,10 @@ these wrong looks, from the outside, exactly like a working one.
 - **`disableProfile` is true.** Otherwise the display name in the token is a suggestion and a visitor
   can rename themselves past their `(guest)` marker.
 - **Prosody can reach the conferencing service.** If it cannot, the sidebar is simply always empty.
+- **`/saml/metadata.xml` serves XML**, when any SAML profile is enabled. Zulip answers that URL with
+  an ordinary HTML page — status 200, so nothing looks wrong — if `SAMLAuthBackend` was never
+  enabled, and with a 500 if python3-saml rejected the rendered settings. Either way the login page
+  still shows the button, and the first person to find out is whoever clicks it.
 
 ## When something is wrong
 

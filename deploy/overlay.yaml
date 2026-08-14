@@ -114,11 +114,34 @@ services:
     ports: !reset null
     # Upstream can build the image from its own directory; we always pull.
     build: !reset null
+    env_file:
+      # SAML. A file rather than more `environment:` entries below, because its
+      # contents are *generated*: SOCIAL_AUTH_SAML_ENABLED_IDPS is a Python
+      # literal built by `consort generate` out of the metadata document the IdP
+      # publishes, so that nobody transcribes an entity ID or an SSO URL.
+      #
+      # Nothing this file sets may also be named under `environment:` below —
+      # `environment` wins, and the loss would be silent.
+      #
+      # `required: false` is for the bare `docker compose up -d` this directory
+      # is meant to support. `generate` always writes the file, but a checkout
+      # that has never run it should not fail to start over an SSO setup it is
+      # not using. (Long-form env_file needs Compose 2.24, which preflight
+      # already requires for !reset and !override.)
+      - path: ./generated/saml/idps.env
+        required: false
     volumes:
       # nginx's allow-list for the internal hook. Generated rather than shipped,
       # because it names the subnet the conferencing service calls from and that
       # is a deployment fact, not a constant. See zulip/jitsi-hook.conf.template.
       - ./generated/jitsi-hook.conf:/etc/nginx/zulip-include/app.d/jitsi-hook.conf:ro
+      # The IdP signing certificates, one per enabled SAML profile. Zulip reads
+      # /etc/zulip/saml/idps/<idp name>.crt by itself, so matching the file name
+      # to the profile name is the entire wiring — there is no path to configure
+      # and nothing to keep in step. These are public keys, which is why they are
+      # in generated/ and not secrets/: the IdP serves them at a URL to anyone
+      # who asks.
+      - ./generated/saml/idps:/etc/zulip/saml/idps:ro
     environment:
       SETTING_EXTERNAL_HOST: ${ZULIP_HOST:-zulip.localhost}:${INGRESS_PORT:-8443}
       SETTING_ZULIP_ADMINISTRATOR: ${ZULIP_ADMIN_EMAIL:-admin@example.com}
