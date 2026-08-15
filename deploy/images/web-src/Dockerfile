@@ -122,6 +122,26 @@ RUN set -eux; \
     printf '\nconfig.audioQuality.enableAdvancedAudioSettings = true;\n' \
         >> /defaults/settings-config.js
 
+# Without this, the sound of a screen share is mixed into the sharer's microphone
+# and the two arrive as one track — no separate volume for the shared
+# application, no way to stop its sound short of muting the person, and nothing
+# at all sent by a sharer whose microphone is muted.
+#
+# It is lib-jitsi-meet's own flag, guarding JitsiConference.addTrack against a
+# second audio source, and this is the only route to it: setting it in the URL
+# hash does NOT reach the library, because jitsi-meet does not carry `testing`
+# through its config override whitelist. config.js does reach it, since
+# getConferenceOptions spreads the whole config into the options the conference
+# is built with.
+#
+# Assigned around whatever is already there rather than into it: unlike
+# audioQuality above, nothing in the templates is guaranteed to have created
+# config.testing first, and a deployment where it happens to exist must not lose
+# what it holds.
+RUN set -eux; \
+    printf '\nconfig.testing = Object.assign({}, config.testing, { allowMultipleTracks: true });\n' \
+        >> /defaults/settings-config.js
+
 # Back to whatever user upstream chose, for the reason images/web spells out: the
 # published image runs as non-root and hardcoding its uid here is the kind of
 # detail that breaks silently on a bump.
