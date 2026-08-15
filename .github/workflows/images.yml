@@ -38,10 +38,10 @@ on:
         default: unstable-2026-06-25
       jitsi_meet_ref:
         description: "Ref of the jitsi-meet fork to compile"
-        default: consort-screenshare-audio
+        default: 53e07419d
       lib_jitsi_meet_ref:
         description: "Ref of the lib-jitsi-meet fork to compile"
-        default: consort-screenshare-audio
+        default: 6535765d
 
 env:
   # Must agree with JITSI_IMAGE_VERSION in deploy/.env.example: prosody and web
@@ -55,14 +55,17 @@ env:
   # remotes these are cloned with locally: the build clones unauthenticated, so
   # both repositories have to stay public.
   #
-  # A branch, not a commit, which the Dockerfile's own comment argues against —
-  # and it is right, the image does change under you between builds. Living with
-  # it here because the fork moves daily; pin these to commits at the point the
-  # audio work settles.
+  # Commits now, not the branch. The audio work has settled, which is the point
+  # this was waiting for — and with a branch it could not be trusted anyway: the
+  # clone layer is cached under scope=web-src and keyed on the text of the RUN
+  # that performs it, so a branch name that never changes is a cache hit however
+  # far the fork has moved. Builds after this one that need new fork code must
+  # move these SHAs; changing only the fork is a build that reports success and
+  # ships the code before it.
   LJM_REPO: https://github.com/Dyslectric/lib-jitsi-meet.git
-  LJM_REF: ${{ inputs.lib_jitsi_meet_ref || 'consort-screenshare-audio' }}
+  LJM_REF: ${{ inputs.lib_jitsi_meet_ref || '6535765d' }}
   JM_REPO: https://github.com/Dyslectric/jitsi-meet.git
-  JM_REF: ${{ inputs.jitsi_meet_ref || 'consort-screenshare-audio' }}
+  JM_REF: ${{ inputs.jitsi_meet_ref || '53e07419d' }}
   # The build context for docker-zulip's own Dockerfile, pinned to the same tag
   # as deploy/vendor/docker-zulip/compose.yaml so the image and the compose file
   # that runs it come from one release.
