@@ -29,6 +29,21 @@ secrets:
     file: ./secrets/secret_key
   zulip__email_password:
     file: ./secrets/email_password
+  # The Web Push signing keypair. Both halves go through the same file route as
+  # the rest: the private key because it is a private key, and the public one
+  # beside it only so that the two cannot drift apart — a public key from one
+  # pair and a private key from another produces a server that reports push as
+  # enabled and delivers nothing.
+  #
+  # Losing or regenerating these is not equivalent to losing a password. Every
+  # browser subscription is bound to the public key it subscribed with, so a new
+  # pair silently invalidates every device already subscribed, and each one has
+  # to subscribe again before it hears anything. `generate` therefore writes
+  # them once and never rewrites them.
+  zulip__vapid_private_key:
+    file: ./secrets/vapid_private_key
+  zulip__vapid_public_key:
+    file: ./secrets/vapid_public_key
 
 services:
   # ---------------------------------------------------------------------------
@@ -114,6 +129,14 @@ services:
     ports: !reset null
     # Upstream can build the image from its own directory; we always pull.
     build: !reset null
+    # Concatenated with the six upstream already asks for, not replacing them —
+    # compose joins `secrets` across files the same way it joins `ports`. The
+    # image maps every `zulip__<name>` it is given into zulip-secrets.conf as
+    # `<name>`, which is how `secret_key` and `email_password` arrive; these two
+    # ride the same mechanism rather than needing one of their own.
+    secrets:
+      - zulip__vapid_private_key
+      - zulip__vapid_public_key
     env_file:
       # SAML. A file rather than more `environment:` entries below, because its
       # contents are *generated*: SOCIAL_AUTH_SAML_ENABLED_IDPS is a Python

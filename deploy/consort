@@ -710,6 +710,47 @@ cmd_generate() {
         fi
     done
 
+    # The Web Push signing keypair, which is a P-256 key rather than a random
+    # string and so cannot join the loop above.
+    #
+    # Web Push is off unless both halves are present — WEB_PUSH_ENABLED in the
+    # server is precisely "both of these secrets are set" — and when it is off
+    # the server tells the client push is unavailable and sends nothing. There
+    # is no error, no log line and no banner: notifications simply never arrive,
+    # which is a much quieter failure than it deserves to be.
+    #
+    # Written once and never rewritten. A new keypair invalidates every browser
+    # subscription already made against the old public key, so regenerating
+    # these silences every device that had been working until each one
+    # subscribes again.
+    if [ ! -f secrets/vapid_private_key ] || [ ! -f secrets/vapid_public_key ]; then
+        if command -v openssl >/dev/null 2>&1; then
+            local pem
+            pem=$(openssl ecparam -name prime256v1 -genkey -noout 2>/dev/null)
+
+            # The private half is base64 of the PEM, which is the form the
+            # server b64decodes before handing it to Vapid.from_pem().
+            printf '%s\n' "$pem" | openssl base64 -A > secrets/vapid_private_key
+
+            # The public half is the 65-byte uncompressed point sitting at the
+            # tail of the DER SubjectPublicKeyInfo, base64url and unpadded. That
+            # is the only form a browser accepts as applicationServerKey, and
+            # the server hands it to the client verbatim.
+            printf '%s\n' "$pem" \
+                | openssl ec -pubout -outform DER 2>/dev/null \
+                | tail -c 65 | openssl base64 -A | tr '+/' '-_' | tr -d '=' \
+                > secrets/vapid_public_key
+
+            chmod 600 secrets/vapid_private_key secrets/vapid_public_key
+            ok "generated a Web Push keypair"
+        else
+            # Not fatal: everything else in the stack runs without it, and an
+            # install should not fail over a notification transport. But say so,
+            # because the alternative is discovering it from a silent phone.
+            warn "openssl not found — Web Push will stay off (no secrets/vapid_* written)"
+        fi
+    fi
+
     # memcached's password is the one exception, and it is not optional.
     #
     # Compose bind-mounts a file secret with the *host* file's owner and mode,
