@@ -32,10 +32,21 @@ proper in-app calling experience on top.
 - **The call lives in Zulip.** Clicking call opens Jitsi in an embedded panel you can drag around,
   minimize to a bar under the compose box, maximize, or resize — it survives switching channels,
   rather than opening a new tab.
+- **Channels come in kinds.** A text channel keeps its conversations in topics; a voice channel is
+  one a call lives in, whose text can be switched off entirely; a lounge keeps ephemeral rooms to
+  drop into instead of topics. The sidebar says which at a glance, with a corner badge for whatever
+  the main mark could not carry.
+
+  <img src="docs/channel-kinds.svg" alt="The five marks the sidebar draws: a folder for a text channel, a speaker for a voice channel, bars for a lounge, a hash for a single-threaded channel and a globe for a web-public one — with lock, hash and bars badges qualifying them" width="470">
+
 - **A call-aware sidebar (channels).** A channel with a live call shows a speaker icon (a lock for
   private channels) and the participants' avatars — with a ring on whoever is speaking — updated the
   instant someone joins, leaves, or talks, pushed as a real-time client event rather than polled.
   Channels are found this way instead of a posted message.
+
+  <img src="docs/voice-channel.gif" alt="A voice channel in the sidebar with four participants, a green ring lighting on each avatar as that person speaks, two of them overlapping" width="330">
+
+  *Four people talking, rings following the speech. Also at 60fps: [voice-channel.mp4](docs/voice-channel.mp4).*
 - **A roster message (DMs & groups).** For a direct message or group, "📹 Call in progress — Ada,
   Bob" is posted into the real conversation and edited as people come and go. It works across DMs
   and organizations — things a bot could not do — because it is authored (as the initiator) through
@@ -77,7 +88,8 @@ core-hook  ◀─ channel: push occupancy → sidebar event · DM/group: post/ed
 | [`embedded-call/`](embedded-call/) | The in-Zulip embedded call: a `JitsiMeetExternalAPI` iframe at the app root (drag/minimize/maximize/resize), the call-aware sidebar, the in-iframe speaking relay (`jitsi-speaking-relay.js`), and CSP notes. |
 | [`jitsi-token-harness/`](jitsi-token-harness/) | A standalone harness that *proves* the isolation — a token for one room or tenant is refused at another — against a real Jitsi/Prosody stack. |
 | [`deploy/`](deploy/) | The installer: the two upstream compose files vendored verbatim at a pinned tag, the overlay that is our entire diff against them, Caddy, the two custom image builds, and `consort`. |
-| [`docs/`](docs/) | Architecture (rev4), the Prosody `event_sync` runbook, and design notes. |
+| [`docs/`](docs/) | Architecture (rev4), the Prosody `event_sync` runbook, design notes, and the images above. |
+| [`tools/`](tools/) | Not the product: the generator that draws the demo avatars and captures the sidebar animation. |
 
 Prosody-side plugins used: `event_sync` (occupancy → the service), `muc_census` (reconciliation),
 `token_affiliation_legacy` + `disable_cascading_set` (moderator strictly from the token), and Jitsi's
