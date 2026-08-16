@@ -65,7 +65,7 @@ env:
   LJM_REPO: https://github.com/Dyslectric/lib-jitsi-meet.git
   LJM_REF: ${{ inputs.lib_jitsi_meet_ref || '1c12dc67' }}
   JM_REPO: https://github.com/Dyslectric/jitsi-meet.git
-  JM_REF: ${{ inputs.jitsi_meet_ref || '43ea30db5' }}
+  JM_REF: ${{ inputs.jitsi_meet_ref || '8ea00668f' }}
   # The build context for docker-zulip's own Dockerfile, pinned to the same tag
   # as deploy/vendor/docker-zulip/compose.yaml so the image and the compose file
   # that runs it come from one release.
