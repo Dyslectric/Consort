@@ -90,6 +90,8 @@ RUN set -eux; \
 # with files, and the result is a deployment that ignores every JITSI_* variable
 # it is given while looking perfectly healthy.
 FROM base AS app
+ARG JM_REF
+ARG LJM_REF
 USER root
 COPY --from=build /src/jitsi-meet/libs /usr/share/jitsi-meet/libs
 COPY --from=build /src/jitsi-meet/css /usr/share/jitsi-meet/css
@@ -99,6 +101,32 @@ COPY --from=build /src/jitsi-meet/sounds /usr/share/jitsi-meet/sounds
 COPY --from=build /src/jitsi-meet/images /usr/share/jitsi-meet/images
 COPY --from=build /src/jitsi-meet/fonts /usr/share/jitsi-meet/fonts
 COPY --from=build /src/jitsi-meet/index.html /usr/share/jitsi-meet/index.html
+
+# The bundles are asked for as `libs/app.bundle.min.js?v=139`, and nginx gives
+# anything carrying a `v` parameter `expires 1y`. The number is written into
+# index.html by hand and upstream bumps it per release — which is fine for a
+# release and useless for us, because a build from a moved fork produces new
+# bytes at a URL every client already holds for a year. Rebuild, pull, restart,
+# and the app that runs is still the one from before: no request is made, so
+# there is nothing for the new image to answer.
+#
+# Stamping the refs onto that number makes the URL change exactly when the code
+# does, which is what the parameter was for. The value stays cacheable — it is
+# still a `v`, so the year still applies, now to bytes that will not change
+# under it.
+#
+# The two commits are the whole of what the compile above depends on, so a build
+# that produces different JavaScript cannot produce the same stamp. The grep is
+# the usual guard: if upstream ever stops writing `?v=` into index.html, this
+# silently stops busting anything, and the failure looks exactly like the
+# problem it fixes.
+RUN set -eux; \
+    stamp="$(printf '%s-%s' "${JM_REF}" "${LJM_REF}" | tr -cd 'A-Za-z0-9._-')"; \
+    for page in /usr/share/jitsi-meet/index.html /usr/share/jitsi-meet/static/*.html; do \
+        [ -f "$page" ] || continue; \
+        sed -i "s#\(libs/[A-Za-z0-9._-]*\.js?v=[0-9]*\)#\1-${stamp}#g" "$page"; \
+    done; \
+    grep -q "app\.bundle\.min\.js?v=[0-9]*-${stamp}" /usr/share/jitsi-meet/index.html
 
 # The speaking relay, exactly as images/web does it — the sidebar's per-user glow
 # depends on it, and a source build that silently dropped it would look like the
