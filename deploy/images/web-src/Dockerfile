@@ -170,6 +170,40 @@ RUN set -eux; \
     printf '\nconfig.testing = Object.assign({}, config.testing, { allowMultipleTracks: true });\n' \
         >> /defaults/settings-config.js
 
+# Twice the bitrate for a screen share, at every resolution it is sent at.
+#
+# lib-jitsi-meet gives a desktop track a flat ceiling — `ssHigh`, 2.5 Mbps for
+# all four codecs — rather than one from the quality ladder the camera uses, so
+# this is not a per-resolution table to edit: the one number is what a share gets
+# whether it is 1920x804 or 640x360. It is deliberately low for a slideshow of a
+# document, and low is what a screen full of moving text or a terminal looks
+# like when the encoder has to fit inside it.
+#
+# Only ssHigh is written. The parser copies across whichever of the bitrate keys
+# are present and leaves the rest at the library's defaults, so nothing here
+# touches camera video — the concern that made this a config edit rather than a
+# change to the four tables in the fork's StandardVideoQualitySettings.
+#
+# Every codec, because the codec in use is decided per call by
+# codecPreferenceOrder and by what the far end supports: raising one of them is a
+# setting that appears to work and then does nothing on the next call.
+#
+# Assigned around what is already there, for the reason config.testing is above:
+# the templates create config.videoQuality.<codec> as an empty object today, and
+# a deployment whose environment fills it in must keep what it holds. The grep
+# fails the build if that stops being true, because an assignment into an object
+# that does not exist takes the whole of config.js down with it — a blank call
+# and a console error, from a bitrate change.
+RUN set -eux; \
+    grep -q 'config.videoQuality.vp9' /defaults/settings-config.js; \
+    printf '\n%s\n%s\n%s\n%s\n%s\n' \
+        "for (const codec of ['av1', 'h264', 'vp8', 'vp9']) {" \
+        "    config.videoQuality[codec] = Object.assign({}, config.videoQuality[codec]);" \
+        "    config.videoQuality[codec].maxBitratesVideo =" \
+        "        Object.assign({}, config.videoQuality[codec].maxBitratesVideo, { ssHigh: 5000000 });" \
+        "}" \
+        >> /defaults/settings-config.js
+
 # Back to whatever user upstream chose, for the reason images/web spells out: the
 # published image runs as non-root and hardcoding its uid here is the kind of
 # detail that breaks silently on a bump.
