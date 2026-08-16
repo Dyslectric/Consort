@@ -197,6 +197,22 @@ services:
       # has to agree on both sides or Prosody rejects every token.
       SETTING_JITSI_JWT_APP_ID: ${JWT_APP_ID:-zulip}
       SETTING_JITSI_DEFAULT_TENANT: ${JITSI_DEFAULT_TENANT:-root}
+      # Whether channels may be made readable without logging in. Off unless
+      # asked for: Zulip requires the server to say yes before an organization
+      # can, deliberately, so that nothing becomes world-readable through an
+      # organization setting alone.
+      #
+      # This is the first of three gates, not a switch. An administrator still
+      # has to enable spectator access for the organization, and then mark a
+      # channel web-public; see Realm.web_public_streams_enabled(). Turning this
+      # on therefore publishes nothing by itself, which is the point of it being
+      # separate.
+      #
+      # True or False, exactly — `generate` refuses anything else, because the
+      # image decides how to write this from the shape of the value and a value
+      # it reads as a string is quoted, and a non-empty quoted string is truthy.
+      # "yes" would not fail; it would enable the feature and look like a typo.
+      SETTING_WEB_PUBLIC_STREAMS_ENABLED: ${WEB_PUBLIC_STREAMS_ENABLED:-False}
       SETTING_JITSI_CONFERENCING_URL: http://conferencing:8080
       SECRETS_jitsi_jwt_app_secret: ${JITSI_JWT_SECRET:?JITSI_JWT_SECRET is required}
       SECRETS_jitsi_room_key: ${JITSI_ROOM_KEY:?JITSI_ROOM_KEY is required}

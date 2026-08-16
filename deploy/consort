@@ -695,6 +695,22 @@ cmd_generate() {
         ok "wrote .env"
     fi
 
+    # Refuse a WEB_PUBLIC_STREAMS_ENABLED that does not mean what it looks like.
+    #
+    # The image writes this setting into settings.py and picks its form from the
+    # shape of the value: True, False and None go in as Python literals, and
+    # everything else goes in quoted. A non-empty quoted string is truthy, so
+    # `no`, `off` and `0` would all switch web-public channels *on* while
+    # reading in this file like a refusal — and the only visible consequence is
+    # that an organization gains the ability to publish channels to the open
+    # internet. Fail here instead, where there is a line number to point at.
+    local web_public
+    web_public=$(env_get WEB_PUBLIC_STREAMS_ENABLED)
+    case "${web_public:-False}" in
+        True | False) ;;
+        *) die "WEB_PUBLIC_STREAMS_ENABLED must be exactly True or False in .env (found '$web_public')" ;;
+    esac
+
     # Zulip's own secrets are files rather than variables: an environment
     # variable is visible in `docker inspect` to anything that can reach the
     # daemon, and these include the database password.
