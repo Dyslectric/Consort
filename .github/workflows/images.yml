@@ -36,12 +36,17 @@ on:
       jitsi_image_version:
         description: "Upstream Jitsi image tag to layer on"
         default: unstable-2026-06-25
+      # Deliberately without defaults. These are read as `inputs.x || '<sha>'`, so
+      # a default here is not a fallback — it is an override that beats the sha
+      # below on every manually started run, and it beats it silently. Left with
+      # their own copies of the sha, the two drifted apart the first time the
+      # forks moved, and a build started from the Actions tab compiled the
+      # previous app and reported success. Empty means "use the sha below",
+      # which is the only answer anyone wants unless they type one.
       jitsi_meet_ref:
-        description: "Ref of the jitsi-meet fork to compile"
-        default: 53e07419d
+        description: "Ref of the jitsi-meet fork to compile (blank = the pinned sha)"
       lib_jitsi_meet_ref:
-        description: "Ref of the lib-jitsi-meet fork to compile"
-        default: 6535765d
+        description: "Ref of the lib-jitsi-meet fork to compile (blank = the pinned sha)"
 
 env:
   # Must agree with JITSI_IMAGE_VERSION in deploy/.env.example: prosody and web
