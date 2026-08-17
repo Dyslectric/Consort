@@ -742,6 +742,33 @@ cmd_generate() {
     fi
     ok "presence timings are consistent (away after ${presence_threshold}s)"
 
+    # The same check for the other clock: how long the server waits before
+    # believing a client that stopped polling is gone. A client's connection is
+    # recycled by a heartbeat every EVENT_QUEUE_HEARTBEAT_MIN_FREQ_SECS to +10s
+    # (the jitter is Zulip's, to keep every client in a deployment from
+    # reconnecting on the same second), and that reconnect is the only evidence
+    # the client still exists. An offline timeout that does not clear the
+    # longest heartbeat interval therefore condemns clients that are wide awake,
+    # in a way that looks like random logouts of the event system rather than a
+    # number set too low.
+    local queue_timeout queue_gc queue_heartbeat
+    queue_timeout=$(env_get EVENT_QUEUE_OFFLINE_TIMEOUT_SECS); queue_timeout=${queue_timeout:-600}
+    queue_gc=$(env_get EVENT_QUEUE_GC_FREQ_SECS); queue_gc=${queue_gc:-60}
+    queue_heartbeat=$(env_get EVENT_QUEUE_HEARTBEAT_MIN_FREQ_SECS); queue_heartbeat=${queue_heartbeat:-45}
+
+    for v in "$queue_timeout" "$queue_gc" "$queue_heartbeat"; do
+        case "$v" in
+            '' | *[!0-9]*) die "the EVENT_QUEUE_* values in .env must be whole numbers of seconds (found '$v')" ;;
+            0) die "the EVENT_QUEUE_* values in .env must be greater than zero" ;;
+        esac
+    done
+
+    # +10 for the jitter, +5 for the reconnect itself.
+    if [ "$queue_timeout" -lt "$((queue_heartbeat + 15))" ]; then
+        die "EVENT_QUEUE_OFFLINE_TIMEOUT_SECS ($queue_timeout) must be at least EVENT_QUEUE_HEARTBEAT_MIN_FREQ_SECS + 15 ($((queue_heartbeat + 15))), or clients that are still connected get treated as gone between heartbeats. Lower EVENT_QUEUE_HEARTBEAT_MIN_FREQ_SECS first."
+    fi
+    ok "event queue timings are consistent (a vanished client is noticed after ${queue_timeout}-$((queue_timeout + queue_gc))s)"
+
     # Zulip's own secrets are files rather than variables: an environment
     # variable is visible in `docker inspect` to anything that can reach the
     # daemon, and these include the database password.

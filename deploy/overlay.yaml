@@ -242,6 +242,19 @@ services:
       SETTING_OFFLINE_THRESHOLD_SECS: ${PRESENCE_OFFLINE_THRESHOLD_SECS:-200}
       SETTING_PRESENCE_PING_INTERVAL_SECS: ${PRESENCE_PING_INTERVAL_SECS:-60}
       SETTING_PRESENCE_UPDATE_MIN_FREQ_SECONDS: ${PRESENCE_UPDATE_MIN_FREQ_SECONDS:-55}
+      # The other half of the same question, for a client that stopped being
+      # there rather than one sitting idle. Presence above answers "open, but
+      # untouched"; these answer "gone without saying so" -- a locked phone, a
+      # suspended laptop, a swiped-away app. Until the server gives up on the
+      # connection the user still counts as present and gets no notification,
+      # and messages that arrived meanwhile wait for the same moment.
+      #
+      # Lowering the timeout alone declares live clients dead: the heartbeat
+      # reconnect is the only sign a client is still there, so it has to come
+      # down first. `generate` refuses pairs where it did not.
+      SETTING_EVENT_QUEUE_OFFLINE_TIMEOUT_SECS: ${EVENT_QUEUE_OFFLINE_TIMEOUT_SECS:-600}
+      SETTING_EVENT_QUEUE_GC_FREQ_SECS: ${EVENT_QUEUE_GC_FREQ_SECS:-60}
+      SETTING_EVENT_QUEUE_HEARTBEAT_MIN_FREQ_SECS: ${EVENT_QUEUE_HEARTBEAT_MIN_FREQ_SECS:-45}
       SECRETS_jitsi_jwt_app_secret: ${JITSI_JWT_SECRET:?JITSI_JWT_SECRET is required}
       SECRETS_jitsi_room_key: ${JITSI_ROOM_KEY:?JITSI_ROOM_KEY is required}
       SECRETS_jitsi_conferencing_secret: ${SHARED_SECRET:?SHARED_SECRET is required}
