@@ -68,7 +68,7 @@ env:
   # move these SHAs; changing only the fork is a build that reports success and
   # ships the code before it.
   LJM_REPO: https://github.com/Dyslectric/lib-jitsi-meet.git
-  LJM_REF: ${{ inputs.lib_jitsi_meet_ref || 'df60d5c9' }}
+  LJM_REF: ${{ inputs.lib_jitsi_meet_ref || 'e00413c8' }}
   JM_REPO: https://github.com/Dyslectric/jitsi-meet.git
   JM_REF: ${{ inputs.jitsi_meet_ref || '560257213' }}
   # The build context for docker-zulip's own Dockerfile, pinned to the same tag
