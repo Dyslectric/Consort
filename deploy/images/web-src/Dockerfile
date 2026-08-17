@@ -204,6 +204,65 @@ RUN set -eux; \
         "}" \
         >> /defaults/settings-config.js
 
+# Sixty frames a second for a screen share, and the encoder told to keep them.
+#
+# Unset, as it was, this is not "whatever the capturer manages". It is the switch
+# lib-jitsi-meet reads to decide that a share is a slideshow, and it decides four
+# things at once — every one of them against a share of something that moves:
+#
+#   * getDisplayMedia is given no frame rate at all, so Chromium captures at its
+#     default 30. Measured on a 3440x1440 panel: 21.5 fps delivered, against 35
+#     with a ceiling of 60. `max` is the whole of what is needed here — an
+#     `ideal` alongside it changed nothing.
+#   * setContentHint reads `max > 5` and settles on 'detail' rather than
+#     'motion', which tells the encoder to spend its budget on a sharp still.
+#   * JingleSessionPC turns the same comparison into capScreenshareBitrate,
+#     which makes the degradation preference 'maintain-resolution': under load
+#     the frame rate is what gets dropped, so the 60 above would collapse to a
+#     slideshow exactly when it mattered. Above 5 it becomes
+#     'maintain-framerate', which is what "60 when possible" has to mean.
+#   * The same flag disables the lower simulcast layers for a share and routes
+#     the bitrate through `desktopbitrate` instead of the `ssHigh` raised above.
+#
+# So this is one number and four behaviours, and the four only agree with each
+# other at the ends of the range. Anything above 5 gets the motion half of them.
+#
+# `min` stays at 5, which is not a floor on what is sent: it is deleted before
+# capture, and used only for the applyConstraints call that keeps Chromium's 0Hz
+# mode from parking a still screen at no frames at all. Raising it would demand
+# frames of a screen that is not changing.
+#
+# The cost is CPU on the sharer, at 60 fps and up to 1920x1080. config.videoQuality
+# .enableAdaptiveMode is on, which walks the codec down AV1 -> VP9 -> VP8 when the
+# encoder cannot keep up, so the failure mode is a softer picture rather than a
+# stalled one.
+#
+# DO NOT EXPECT SIXTY. It is a ceiling, and on Windows the capturer does not
+# reach it: measured on Electron 42 against a 3440x1440 panel, getSettings
+# negotiates 60 and the track delivers 27-38 fps, wandering with the state of the
+# machine. What that number is NOT, each measured rather than assumed:
+#
+#   not the encoder    AV1 and VP9 both sent every frame at 1920x804 with
+#                      qualityLimitationReason 'none', at 3.4-3.7 Mbps against
+#                      the 5 Mbps ceiling above.
+#   not the downscale  3440x1440 uncapped, 1920x804, 1280x720 and 640x360 all
+#                      delivered the same rate in one run.
+#   not the source     window capture measured the same as screen capture.
+#   not our own load   a heavy animation and a near-idle one measured the same.
+#   not the screen     the captured desktop was changing at 96-99 Hz throughout.
+#   not a switch       --webrtc-max-cpu-consumption-percentage=100, the WGC
+#                      capturer features and --disable-frame-rate-limit all
+#                      landed inside the run-to-run noise.
+#
+# The ceiling is Chromium's Windows desktop capture path, so raising it is an
+# Electron question rather than a Jitsi one. The setting still earns its place:
+# against a max of 30 the same machine delivered 29.6 fps, so this is the
+# difference between a hard 30 and the mid 30s -- and it is what buys the motion
+# semantics and the ssHigh path described above, which is most of the point.
+RUN set -eux; \
+    printf '\nconfig.desktopSharingFrameRate = { min: 5, max: 60 };\n' \
+        >> /defaults/settings-config.js
+
 # Back to whatever user upstream chose, for the reason images/web spells out: the
 # published image runs as non-root and hardcoding its uid here is the kind of
 # detail that breaks silently on a bump.
