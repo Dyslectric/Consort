@@ -44,6 +44,15 @@ secrets:
     file: ./secrets/vapid_private_key
   zulip__vapid_public_key:
     file: ./secrets/vapid_public_key
+  # The contact address signed into every push request as the JWT's `sub`. Not
+  # secret, and here only because this file route is how a value reaches
+  # zulip-secrets.conf, which is where the server reads it from.
+  #
+  # Left unset the server falls back to a `localhost` address that Apple's push
+  # service rejects outright, silencing every iOS device while Android carries on
+  # as if push were healthy. `generate` writes this on every run.
+  zulip__vapid_contact_email:
+    file: ./secrets/vapid_contact_email
 
 services:
   # ---------------------------------------------------------------------------
@@ -137,6 +146,7 @@ services:
     secrets:
       - zulip__vapid_private_key
       - zulip__vapid_public_key
+      - zulip__vapid_contact_email
     env_file:
       # SAML. A file rather than more `environment:` entries below, because its
       # contents are *generated*: SOCIAL_AUTH_SAML_ENABLED_IDPS is a Python

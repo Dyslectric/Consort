@@ -767,6 +767,55 @@ cmd_generate() {
         fi
     fi
 
+    # The VAPID `sub` claim: a contact address for whoever runs this server,
+    # signed into every push request so a push service has someone to reach
+    # about a misbehaving sender.
+    #
+    # Apple's push service *validates* it and answers 403 BadJwtToken for an
+    # address it does not believe in, which is a per-service opinion rather than
+    # a rule: Firefox's accepts anything, Google's accepts more than Apple's, and
+    # Apple's rejects unroutable domains outright. The failure that produces is
+    # about as misleading as failures get — Android keeps working, so push looks
+    # configured, while every iPhone on the deployment goes silent and the only
+    # trace is one warn line per send buried in the Zulip logs.
+    #
+    # Unlike the keypair above this is rewritten on every run. It is not bound to
+    # any subscription, so keeping it in step with .env costs nothing and lets a
+    # wrong address be fixed by editing .env and running `up` again.
+    local contact_email contact_domain
+    contact_email=$(env_get VAPID_CONTACT_EMAIL)
+    contact_email=${contact_email:-$(env_get ZULIP_ADMIN_EMAIL)}
+    contact_email=${contact_email:-admin@example.com}
+    contact_domain=${contact_email##*@}
+
+    # Only unroutable domains are refused, not unfamiliar ones. A domain with no
+    # dot (`localhost`) or in a reserved suffix is one no push service can treat
+    # as a contact; anything else is the operator's business, and a deployment
+    # left on the `admin@example.com` default should still install.
+    case "$contact_domain" in
+        localhost | *.localhost | *.local | *.internal | *.test | *.invalid | *.example)
+            die "VAPID_CONTACT_EMAIL (or ZULIP_ADMIN_EMAIL) is '$contact_email', whose domain is not routable. Apple's push service answers 403 BadJwtToken and every iOS device on this deployment goes silent, while Android keeps working. Set a real address in .env." ;;
+        *.*) ;;
+        *)
+            die "VAPID_CONTACT_EMAIL (or ZULIP_ADMIN_EMAIL) is '$contact_email', which has no domain to reach anyone at. Apple's push service answers 403 BadJwtToken and every iOS device on this deployment goes silent, while Android keeps working. Set a real address in .env." ;;
+    esac
+
+    # No trailing newline, and carrying its mailto: scheme, because the server
+    # signs this value into the JWT exactly as written.
+    #
+    # A secret is a bind-mounted file, so rewriting it leaves the compose config
+    # byte-identical and `up -d` sees no reason to recreate anything — the
+    # running container goes on signing with whatever it read into
+    # zulip-secrets.conf when it started. Note a change here so `up` can restart
+    # the one service that cares; on a first install there is nothing to restart,
+    # because adding the secret is itself a config change.
+    if [ -f secrets/vapid_contact_email ] &&
+        [ "$(cat secrets/vapid_contact_email)" != "mailto:${contact_email}" ]; then
+        VAPID_CONTACT_CHANGED=1
+    fi
+    printf '%s' "mailto:${contact_email}" > secrets/vapid_contact_email
+    chmod 600 secrets/vapid_contact_email
+
     # memcached's password is the one exception, and it is not optional.
     #
     # Compose bind-mounts a file secret with the *host* file's owner and mode,
@@ -1105,6 +1154,16 @@ cmd_up() {
     step "Starting"
     compose up -d
     ok "containers started"
+
+    # Set by `generate` when the Web Push contact address in .env stopped
+    # matching the one on disk. Nothing above will have noticed: the compose
+    # config is unchanged, and the value only reaches the server when its
+    # entrypoint reads the secret at startup.
+    if [ "${VAPID_CONTACT_CHANGED:-0}" = "1" ]; then
+        step "Applying the new Web Push contact address"
+        compose up -d --force-recreate zulip
+        ok "Zulip restarted with the new address"
+    fi
 
     wait_for_zulip
     cmd_bootstrap
