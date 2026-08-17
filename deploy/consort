@@ -711,6 +711,37 @@ cmd_generate() {
         *) die "WEB_PUBLIC_STREAMS_ENABLED must be exactly True or False in .env (found '$web_public')" ;;
     esac
 
+    # Presence tuning, checked here because every way of getting it wrong fails
+    # somewhere far from the value. The server asserts `3 * ping + 20 <=
+    # threshold` inside the presence update path, so a bad pair turns every
+    # presence report into a 500 rather than a startup error. And the timestamp
+    # the threshold is measured against is only rewritten once per
+    # `update_min_freq`, so it can be that stale for someone who never stops
+    # typing: a threshold that does not clear `update_min_freq + ping` decides
+    # an active user is away and pushes a notification to the phone in their
+    # hand. Neither shows up as a configuration problem from the outside.
+    local presence_threshold presence_ping presence_min_freq
+    presence_threshold=$(env_get PRESENCE_OFFLINE_THRESHOLD_SECS); presence_threshold=${presence_threshold:-200}
+    presence_ping=$(env_get PRESENCE_PING_INTERVAL_SECS); presence_ping=${presence_ping:-60}
+    presence_min_freq=$(env_get PRESENCE_UPDATE_MIN_FREQ_SECONDS); presence_min_freq=${presence_min_freq:-55}
+
+    local v
+    for v in "$presence_threshold" "$presence_ping" "$presence_min_freq"; do
+        case "$v" in
+            '' | *[!0-9]*) die "the PRESENCE_* values in .env must be whole numbers of seconds (found '$v')" ;;
+            0) die "the PRESENCE_* values in .env must be greater than zero" ;;
+        esac
+    done
+
+    if [ "$((3 * presence_ping + 20))" -gt "$presence_threshold" ]; then
+        die "PRESENCE_OFFLINE_THRESHOLD_SECS ($presence_threshold) must be at least 3 * PRESENCE_PING_INTERVAL_SECS + 20 ($((3 * presence_ping + 20))). Zulip asserts this on every presence update, so a smaller value makes each one fail rather than refusing at startup."
+    fi
+
+    if [ "$presence_threshold" -lt "$((presence_min_freq + presence_ping + 10))" ]; then
+        die "PRESENCE_OFFLINE_THRESHOLD_SECS ($presence_threshold) must clear PRESENCE_UPDATE_MIN_FREQ_SECONDS + PRESENCE_PING_INTERVAL_SECS + 10 ($((presence_min_freq + presence_ping + 10))). Below that, someone typing continuously is counted as away and gets notified while looking at the message."
+    fi
+    ok "presence timings are consistent (away after ${presence_threshold}s)"
+
     # Zulip's own secrets are files rather than variables: an environment
     # variable is visible in `docker inspect` to anything that can reach the
     # daemon, and these include the database password.
