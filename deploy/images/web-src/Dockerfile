@@ -212,6 +212,35 @@ RUN set -eux; \
         "}" \
         >> /defaults/settings-config.js
 
+# A screen share is encoded with VP8, while everything else in the call uses AV1.
+#
+# Nothing on the machines people share from has a hardware AV1 encoder, so libaom
+# encodes it in software -- and lib-jitsi-meet asks a share for L3T3_KEY, three
+# spatial layers inside a single stream. Measured on a 1920x804 share: 15-18ms
+# per layer frame, so about 50ms of encoding for every frame captured.
+#
+# What made that expensive to find is that nothing reports it. Through a fifteen
+# second sample qualityLimitationReason stayed 'none', no packets were lost, the
+# far end decoded in 1ms a frame with nothing dropped -- and it received a flat
+# 32 fps against the 50 being captured. The frames were never produced. The cost
+# lands on the machine rather than on the encoder's own backpressure, which is
+# also why enableAdaptiveMode never walks the codec down by itself: the CPU
+# limitation it waits for is never declared.
+#
+# screenshareCodec is separate from codecPreferenceOrder, so camera video keeps
+# AV1 and everything that goes with it. The trade is a softer picture per
+# megabit, which is what the ceiling above is now sized for.
+#
+# The key is flat. JitsiConference reads config.videoQuality.screenshareCodec and
+# builds the jvb/p2p split from it internally, so a setting written under
+# videoQuality.jvb is read by nothing and fails silently. config.p2p
+# .screenshareCodec is the equivalent for peer-to-peer calls, which this
+# deployment does not have (ENABLE_P2P=0).
+RUN set -eux; \
+    grep -q 'config.videoQuality.vp9' /defaults/settings-config.js; \
+    printf '\nconfig.videoQuality.screenshareCodec = "vp8";\n' \
+        >> /defaults/settings-config.js
+
 # Sixty frames a second for a screen share, and the encoder told to keep them.
 #
 # Unset, as it was, this is not "whatever the capturer manages". It is the switch
