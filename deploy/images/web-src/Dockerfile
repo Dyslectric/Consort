@@ -170,7 +170,7 @@ RUN set -eux; \
     printf '\nconfig.testing = Object.assign({}, config.testing, { allowMultipleTracks: true });\n' \
         >> /defaults/settings-config.js
 
-# Twice the bitrate for a screen share, at every resolution it is sent at.
+# Twelve megabits for a screen share, at every resolution it is sent at.
 #
 # lib-jitsi-meet gives a desktop track a flat ceiling — `ssHigh`, 2.5 Mbps for
 # all four codecs — rather than one from the quality ladder the camera uses, so
@@ -188,6 +188,14 @@ RUN set -eux; \
 # codecPreferenceOrder and by what the far end supports: raising one of them is a
 # setting that appears to work and then does nothing on the next call.
 #
+# Twelve rather than the five it was before, because five was being reached
+# rather than spent: a 1920x804 share of moving content measured 5.4-6.0 Mbps
+# against it, in bursts that line up with the busiest seconds. The number is
+# also shared rather than per-layer -- all three spatial layers of a K-SVC
+# stream live inside one encoding, and a measured split put 2519, 667 and 204
+# kbps across them, so roughly a quarter of the ceiling is spent on two layers
+# that a single watcher never sees.
+#
 # Assigned around what is already there, for the reason config.testing is above:
 # the templates create config.videoQuality.<codec> as an empty object today, and
 # a deployment whose environment fills it in must keep what it holds. The grep
@@ -200,7 +208,7 @@ RUN set -eux; \
         "for (const codec of ['av1', 'h264', 'vp8', 'vp9']) {" \
         "    config.videoQuality[codec] = Object.assign({}, config.videoQuality[codec]);" \
         "    config.videoQuality[codec].maxBitratesVideo =" \
-        "        Object.assign({}, config.videoQuality[codec].maxBitratesVideo, { ssHigh: 5000000 });" \
+        "        Object.assign({}, config.videoQuality[codec].maxBitratesVideo, { ssHigh: 12000000 });" \
         "}" \
         >> /defaults/settings-config.js
 
