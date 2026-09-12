@@ -77,9 +77,10 @@ together).
 - **Deploy** it in your **custom docker-jitsi-meet web image** (load it on the
   conference page with a `<script>`) — the same surface you use for other web
   tweaks; no Prosody or JVB change. Details in the file header.
-- **Tune** `SPEAKING_LEVEL` / `SILENCE_MS`, and verify the **local** participant
-  (your own avatar) glows — the local audio-level/name path uses web-app internals
-  that vary by Jitsi version.
+- **Tune** `SPEAKING_LEVEL` / `SILENCE_MS`. The **local** participant's name comes
+  from `features/base/participants`, not `features/base/settings`: a JWT login puts
+  the token's name only on the participant, so reading settings left your own
+  avatar dark. If it goes dark again after a Jitsi bump, check `localName()` first.
 
 ## Verification status — UNPROVEN, needs the dev env
 
