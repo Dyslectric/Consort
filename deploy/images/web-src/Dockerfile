@@ -230,11 +230,11 @@ RUN set -eux; \
 # A share started after the phone joined renders, which is what made it look
 # intermittent. AV1 and VP9 shares, one stream each, rendered on every join.
 #
-# VP9 is the middle: a single K-SVC stream the phone decodes in hardware, and far
-# cheaper to encode than AV1. One caveat stays open: lib-jitsi-meet's desktop
-# complexity order is VP9 -> VP8 -> AV1, so if enableAdaptiveMode ever declares
-# the sharer CPU-limited it would move a share down to VP8 and bring the black
-# tile back on Android. AV1, last in that order, is never moved.
+# VP9 is a single K-SVC stream the phone decodes in hardware. Its encode cost has
+# not been measured against AV1's above; the frame rate tests further down only
+# found that both kept up at 1920x804. If enableAdaptiveMode declares the sharer
+# CPU-limited, the fork moves a VP9 share to AV1. Upstream's order was VP9 -> VP8
+# -> AV1, which would have brought the black tile back on Android.
 #
 # screenshareCodec is separate from codecPreferenceOrder, so camera video keeps
 # AV1 and everything that goes with it.
