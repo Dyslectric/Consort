@@ -212,24 +212,32 @@ RUN set -eux; \
         "}" \
         >> /defaults/settings-config.js
 
-# A screen share is encoded with VP8, while everything else in the call uses AV1.
+# A screen share is encoded with VP9, while everything else in the call uses AV1.
 #
-# Nothing on the machines people share from has a hardware AV1 encoder, so libaom
-# encodes it in software -- and lib-jitsi-meet asks a share for L3T3_KEY, three
-# spatial layers inside a single stream. Measured on a 1920x804 share: 15-18ms
-# per layer frame, so about 50ms of encoding for every frame captured.
+# Not AV1: nothing on the machines people share from has a hardware AV1 encoder,
+# so libaom encodes it in software -- and lib-jitsi-meet asks a share for
+# L3T3_KEY, three spatial layers inside a single stream. Measured on a 1920x804
+# share: 15-18ms per layer frame, so about 50ms of encoding for every frame
+# captured. Nothing reports that cost: qualityLimitationReason stayed 'none', no
+# packets were lost, the far end decoded in 1ms a frame -- and received a flat 32
+# fps against the 50 being captured. The frames were never produced.
 #
-# What made that expensive to find is that nothing reports it. Through a fifteen
-# second sample qualityLimitationReason stayed 'none', no packets were lost, the
-# far end decoded in 1ms a frame with nothing dropped -- and it received a flat
-# 32 fps against the 50 being captured. The frames were never produced. The cost
-# lands on the machine rather than on the encoder's own backpressure, which is
-# also why enableAdaptiveMode never walks the codec down by itself: the CPU
-# limitation it waits for is never declared.
+# Not VP8 either, which is what this was for a while. A VP8 share is simulcast --
+# three separate streams -- and the Android app, which runs Jitsi's native SDK
+# (upstream lib-jitsi-meet and react-native-webrtc 124) rather than this build,
+# shows it as a black tile whenever it joins a call where the share is already
+# running. Its decoder keeps producing frames and none of them reach the screen.
+# A share started after the phone joined renders, which is what made it look
+# intermittent. AV1 and VP9 shares, one stream each, rendered on every join.
+#
+# VP9 is the middle: a single K-SVC stream the phone decodes in hardware, and far
+# cheaper to encode than AV1. One caveat stays open: lib-jitsi-meet's desktop
+# complexity order is VP9 -> VP8 -> AV1, so if enableAdaptiveMode ever declares
+# the sharer CPU-limited it would move a share down to VP8 and bring the black
+# tile back on Android. AV1, last in that order, is never moved.
 #
 # screenshareCodec is separate from codecPreferenceOrder, so camera video keeps
-# AV1 and everything that goes with it. The trade is a softer picture per
-# megabit, which is what the ceiling above is now sized for.
+# AV1 and everything that goes with it.
 #
 # The key is flat. JitsiConference reads config.videoQuality.screenshareCodec and
 # builds the jvb/p2p split from it internally, so a setting written under
@@ -238,7 +246,7 @@ RUN set -eux; \
 # deployment does not have (ENABLE_P2P=0).
 RUN set -eux; \
     grep -q 'config.videoQuality.vp9' /defaults/settings-config.js; \
-    printf '\nconfig.videoQuality.screenshareCodec = "vp8";\n' \
+    printf '\nconfig.videoQuality.screenshareCodec = "vp9";\n' \
         >> /defaults/settings-config.js
 
 # Sixty frames a second for a screen share, and the encoder told to keep them.
