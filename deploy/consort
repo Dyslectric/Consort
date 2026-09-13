@@ -769,6 +769,17 @@ cmd_generate() {
     fi
     ok "event queue timings are consistent (a vanished client is noticed after ${queue_timeout}-$((queue_timeout + queue_gc))s)"
 
+    # The image quotes this straight into jicofo.conf as a HOCON duration, so a
+    # bare number, which is how every other timing in .env is written, is not an
+    # error anywhere visible: Jicofo fails to parse its config and the calls stop
+    # working with nothing pointing back here.
+    local lone_timeout
+    lone_timeout=$(env_get JICOFO_CONF_SINGLE_PARTICIPANT_TIMEOUT); lone_timeout=${lone_timeout:-24 hours}
+    if ! printf '%s' "$lone_timeout" | grep -qE '^[1-9][0-9]* (seconds|minutes|hours)$'; then
+        die "JICOFO_CONF_SINGLE_PARTICIPANT_TIMEOUT in .env must be a whole number and a unit, like '24 hours' or '90 minutes' (found '$lone_timeout')"
+    fi
+    ok "a lone participant keeps their call for ${lone_timeout}"
+
     # Zulip's own secrets are files rather than variables: an environment
     # variable is visible in `docker inspect` to anything that can reach the
     # daemon, and these include the database password.

@@ -339,6 +339,25 @@ services:
     # Upstream binds its REST port to 127.0.0.1:8888, which collides with enough
     # other software to be worth not having; nothing here uses it.
     ports: !reset null
+    environment:
+      # How long someone may be alone in a call before Jicofo tears down their
+      # media session. Upstream's 20 seconds is what dropped streamers: the
+      # next person to join got a brand new bridge conference, the one who had
+      # been waiting was re-invited into it, and that re-invite could come up
+      # carrying no media -- a client that gave up and left, and a black tile
+      # for whoever had just arrived. Visible in the logs as `expired, send
+      # session-terminate: true` 20s after a `gone`, then JVB's "no activity in
+      # over PT1M" for the same endpoint.
+      #
+      # Voice channels here are sat in alone for hours, so this is set past any
+      # realistic wait rather than to a few minutes. A lone endpoint costs the
+      # bridge almost nothing: with nobody receiving, nothing is forwarded.
+      #
+      # Written here rather than only in .env because `consort up` keeps an
+      # existing .env as it is, and a deployment made before this would
+      # otherwise go on dropping people. It is a HOCON duration, quoted into
+      # jicofo.conf by the image, so it needs its unit.
+      JICOFO_CONF_SINGLE_PARTICIPANT_TIMEOUT: ${JICOFO_CONF_SINGLE_PARTICIPANT_TIMEOUT:-24 hours}
     volumes: !override
       - jitsi-jicofo-config:/config
     networks:
